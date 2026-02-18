@@ -9,11 +9,11 @@
 - Country files use ISO3 uppercase: `DEU.yml`
 - Keys are snake_case
 - Paths are repo-relative
-- CRS values are EPSG strings, e.g. `EPSG:6933`
+- CRS values are EPSG strings, e.g. `EPSG:3035`
 
 ## Add a new country
 1. Create `config/countries/<ISO3>.yml`
-2. Add `config/crosswalks/<ISO3>_admin_crosswalk.csv`
+2. Add `config/crosswalks/<ISO3>.csv`
 3. Verify source columns and join keys
 4. Run pipeline checks
 

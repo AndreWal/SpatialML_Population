@@ -7,7 +7,7 @@ required_columns:
 
 types:
   country_code: "character"
-  admin_id: "character"
+  admin_id: "integer"
   admin_name: "character"
   year: "integer"
   population: "numeric"

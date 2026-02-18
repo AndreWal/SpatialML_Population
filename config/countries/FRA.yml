@@ -1,0 +1,38 @@
+country:
+  iso3: "FRA"
+  name: "France"
+  enabled: false
+
+inputs:
+  tabular:
+    - id: "tab_main"
+      path: "data/raw/FRA/census.csv"
+      format: "csv"
+      years: [1900, 1910]
+      columns:
+        admin_id_raw: "admin_id"
+        admin_name: "admin_name"
+        year: "year"
+        population: "population"
+
+  geometry:
+    - id: "geom_main"
+      path: "data/raw/FRA/admin.geojson"
+      format: "geojson"
+      columns:
+        admin_id_raw: "admin_id"
+        admin_name: "admin_name"
+
+harmonization:
+  crosswalk_file: "config/crosswalks/FRA.csv"
+  unmatched_policy: "warn"
+
+assemblies:
+  - id: "main_panel"
+    target_unit_id: "ADM_HARM_FRA_V1"
+    tabular_recipe:
+      strategy: "single"
+      use_inputs: ["tab_main"]
+    geometry_recipe:
+      strategy: "single"
+      use_inputs: ["geom_main"]

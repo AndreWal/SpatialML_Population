@@ -1,0 +1,48 @@
+services:
+  pipeline:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: spatial-predictions
+    environment:
+      - MOCK_MODE=${MOCK_MODE:-true}
+    volumes:
+      # Mount raw data so it persists outside the container
+      - ./data/raw:/project/data/raw:ro
+      # Mount output directories for persistence
+      - ./data/final:/project/data/final
+      - ./data/intermediate:/project/data/intermediate
+      # Mount targets store for caching between runs
+      - ./_targets:/project/_targets
+      # Mount logs and models
+      - ./logs:/project/logs
+      - ./models:/project/models
+    command: ["R", "-q", "-e", "targets::tar_make()"]
+
+  test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: spatial-predictions-test
+    environment:
+      - MOCK_MODE=true
+    command: >
+      R -q -e "testthat::test_dir('tests/testthat')"
+    profiles:
+      - test
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.22.0
+    container_name: spatial-predictions-mlflow
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./mlruns:/mlflow/mlruns
+    command: >
+      mlflow server
+        --host 0.0.0.0
+        --port 5000
+        --backend-store-uri sqlite:///mlflow/mlruns/mlflow.db
+        --default-artifact-root /mlflow/mlruns/artifacts
+    profiles:
+      - ml

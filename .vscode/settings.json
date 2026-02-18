@@ -1,0 +1,14 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "R": true,
+        "/^sudo apt-get install -y libgit2-dev 2>&1 \\| tail -5$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "docker build": true,
+        "/^sudo systemctl start docker 2>&1 \\|\\| sudo service docker start 2>&1; sleep 2; docker info 2>&1 \\| head -5$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}

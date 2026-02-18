@@ -3,34 +3,46 @@ country:
   name: "Germany"
   enabled: true
 
-input:
+inputs:
   tabular:
-    path: "data/raw/DEU/Data_1890_1918.csv"
-    format: "csv"
-    delimiter: ","
-    encoding: "UTF-8"
-    columns:
-      admin_id: "Wahlkreis_Nummer"
-      admin_name: "Wahlkreis_Name"
-      year: "Jahr"
-      population: "pop"
-    year_filter: [1890, 1895, 1900, 1905, 1910]
+    - id: "tab_main"
+      path: "data/raw/DEU/Data_1890_1918.csv"
+      format: "csv"
+      delimiter: ","
+      encoding: "UTF-8"
+      columns:
+        admin_id_raw: "Wahlkreis_Nummer"
+        admin_name: "Wahlkreis_Name"
+        year: "Jahr"
+        population: "pop"
+      year_filter: [1890, 1895, 1900, 1905, 1910]
 
   geometry:
-    path: "data-raw/DEU/Shapefiles/GERMAN1895ELECTORALDISTRICTS.shp"
-    layer: null
-    columns:
-      admin_id: "OBJECTID"
-      admin_name: "DISTRICT"
-    source_crs: "EPSG:4326"
+    - id: "geom_main"
+      path: "data/raw/DEU/Shapefiles/harvard-german1895electoraldistricts-geojson.json"
+      format: "geojson"
+      columns:
+        admin_id_raw: "OBJECTID"
+        admin_name: "DISTRICT"
+      source_crs: "EPSG:4326"
 
 harmonization:
-  #crosswalk_file: "config/crosswalks/DEU_admin_crosswalk.csv"
+  crosswalk_file: "config/crosswalks/DEU.csv"
   tabular_join_key: "Wahlkreis_Nummer"
   polygon_join_key: "OBJECTID"
   aggregation:
     population: "sum"
-  unmatched_policy: "fail"   # fail | warn | drop
+  unmatched_policy: "fail"
+
+assemblies:
+  - id: "main_panel"
+    target_unit_id: "ADM_HARM_DEU_V1"
+    tabular_recipe:
+      strategy: "single"
+      use_inputs: ["tab_main"]
+    geometry_recipe:
+      strategy: "single"
+      use_inputs: ["geom_main"]
 
 qa_override:
   join_coverage_min: 0.99

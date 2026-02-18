@@ -1,0 +1,36 @@
+# Data (mounted at runtime, not baked into image)
+data/raw/
+data/intermediate/
+data/final/
+
+# Targets store
+_targets/
+
+# renv library (rebuilt inside container from lockfile)
+renv/library/
+renv/staging/
+renv/sandbox/
+
+# Logs and models
+logs/
+models/
+mlruns/
+cache/
+
+# OS / editor artifacts
+.Rhistory
+.RData
+.DS_Store
+*.Rproj.user
+.vscode/
+.idea/
+
+# Git
+.git/
+.gitignore
+
+# Misc exploratory scripts
+misc/
+
+# README (not needed at runtime)
+README.md

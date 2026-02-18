@@ -3,3 +3,21 @@ features_registry:
     type: "raster_zonal"
     source_config: "config/sources/elevation.yml"
     enabled: true
+
+  # Future features (enable when source configs are created):
+  # - id: "slope_mean"
+  #   type: "raster_zonal"
+  #   source_config: "config/sources/elevation.yml"
+  #   enabled: false
+  # - id: "climate_temp_mean"
+  #   type: "raster_zonal"
+  #   source_config: "config/sources/climate.yml"
+  #   enabled: false
+  # - id: "nightlights_mean"
+  #   type: "raster_zonal"
+  #   source_config: "config/sources/nightlights.yml"
+  #   enabled: false
+  # - id: "travel_time_city_mean"
+  #   type: "raster_zonal"
+  #   source_config: "config/sources/accessibility.yml"
+  #   enabled: false

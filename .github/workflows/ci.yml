@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    container:
+      image: rocker/geospatial:4.5.2
+
+    env:
+      MOCK_MODE: "true"
+      RENV_PATHS_CACHE: /renv-cache
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache renv library
+        uses: actions/cache@v4
+        with:
+          path: |
+            renv/library
+            /renv-cache
+          key: renv-${{ runner.os }}-${{ hashFiles('renv.lock') }}
+          restore-keys: |
+            renv-${{ runner.os }}-
+
+      - name: Install system dependencies
+        run: |
+          apt-get update -qq
+          apt-get install -y --no-install-recommends \
+            libgit2-dev \
+            libsodium-dev
+
+      - name: Restore renv packages
+        run: |
+          R -q -e "renv::restore(prompt = FALSE)"
+
+      - name: Run tests
+        run: |
+          R -q -e "testthat::test_dir('tests/testthat')"
+
+      - name: Run pipeline
+        run: |
+          R -q -e "targets::tar_make()"
+
+      - name: Validate pipeline outputs
+        run: |
+          R -q -e "
+            targets::tar_load(cv_summary)
+            cat('CV Summary:\n')
+            print(cv_summary)
+            stopifnot(nrow(cv_summary) > 0)
+            cat('\nPipeline validation passed.\n')
+          "
