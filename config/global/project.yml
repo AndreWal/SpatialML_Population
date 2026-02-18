@@ -1,0 +1,18 @@
+project:
+  name: "multi_country_geospatial_ml"
+  version: "0.1.0"
+  seed: 20260216
+  timezone: "Europe/Zurich"
+
+runtime:
+  fail_on_warning: false
+  parallel_workers: 6
+  chunk_size_rows: 500000
+
+countries:
+  enabled: ["DEU", "NLD"]  # "CHE", "FRA"
+
+outputs:
+  vector_format: "gpkg"
+  raster_format: "tif"
+  table_format: "parquet"

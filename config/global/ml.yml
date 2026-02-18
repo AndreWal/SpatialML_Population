@@ -1,0 +1,28 @@
+ml:
+  target_variable: "population"
+  feature_set: "default_v1"
+
+  split:
+    method: "spatial_cv"
+    folds: 5
+    repeats: 1
+    block_size_km: 100
+
+  models:
+    - id: "rf"
+      engine: "ranger"
+      tune: true
+    - id: "xgb"
+      engine: "xgboost"
+      tune: true
+    - id: "cat"
+      engine: "catboost"
+      tune: true
+
+  evaluation:
+    metrics: ["rmse", "mae", "rsq"]
+    save_fold_predictions: true
+
+  raster_prediction:
+    resolution_m: 1000
+    clamp_to_training_range: true

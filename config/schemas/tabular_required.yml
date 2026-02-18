@@ -1,0 +1,13 @@
+required_columns:
+  - country_code
+  - admin_id
+  - admin_name
+  - year
+  - population
+
+types:
+  country_code: "character"
+  admin_id: "character"
+  admin_name: "character"
+  year: "integer"
+  population: "numeric"

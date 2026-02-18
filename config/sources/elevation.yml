@@ -1,0 +1,23 @@
+source:
+  id: "elevation"
+  provider: "Copernicus DEM GLO-30 (AWS Open Data)"
+  mode: "download"   
+  url: "s3://copernicus-dem-30m/"   
+  version: "GLO-30"
+  license: "Copernicus/ESA terms (see Copernicus DEM user license)"
+  checksum_sha256: null  
+
+storage:
+  raw_path: "data/raw/global/elevation/copernicus_dem_glo30/"
+  processed_path: "data/intermediate/features/elevation_30m.tif"  # or a mosaic you build
+
+processing:
+  input_crs: "EPSG:4326"
+  resample_to_canonical_grid: true
+  target_resolution_m: 30        # keep native, or set to your canonical grid (e.g., 1000)
+  nodata_values: [-32767, -9999] # common DEM nodata values; confirm after first tile fetch
+  zonal_stat: "mean"
+
+temporal:
+  reference_year: null
+  apply_to_years: "all"

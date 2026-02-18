@@ -1,0 +1,7 @@
+paths:
+  raw_data: "data/raw/<ISO3>"
+  intermediate_data: "data/intermediate/<ISO3>"
+  final_data: "data/final"
+  logs: "logs"
+  models: "models"
+  cache: "cache"

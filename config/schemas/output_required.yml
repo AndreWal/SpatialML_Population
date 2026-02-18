@@ -1,0 +1,6 @@
+required_columns:
+  - country_code
+  - admin_unit_harmonized
+  - year
+  - population
+  - geometry

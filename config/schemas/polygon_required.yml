@@ -1,0 +1,4 @@
+required_columns:
+  - admin_id
+  - admin_name
+  - geometry

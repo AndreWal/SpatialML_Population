@@ -1,0 +1,105 @@
+inputs:
+  tabular:
+    - id: "tab_main"
+      path: "data/raw/NLD/Census_adj.csv"
+      format: "csv"
+      years: [1850, 1860, 1870, 1880, 1890, 1900, 1910, 1920, 1930, 1940, 1950, 1960, 1970, 1990, 2000, 2010, 2020]
+      columns: {admin_id: "GMDNR", admin_name: "GMDNAME", year: "year", population: "pop"}
+
+  geometry:
+    - id: "geom_2020"
+      path: "data/raw/NLD/nl_2020.geojson"
+      format: "geojson"
+      valid_years: [2020]
+      columns: {admin_id: "cbscode", admin_name: "naam"}
+    - id: "geom_2010"
+      path: "data/raw/NLD/nl_2010.geojson"
+      format: "geojson"
+      valid_years: [2010]
+      columns: {admin_id: "cbscode", admin_name: "naam"}
+    - id: "geom_2000"
+      path: "data/raw/NLD/nl_2000.geojson"
+      format: "geojson"
+      valid_years: [2000]
+      columns: {admin_id: "cbscode", admin_name: "naam"}
+    - id: "geom_1990"
+      path: "data/raw/NLD/nl_1990.geojson"
+      format: "geojson"
+      valid_years: [1990]
+      columns: {admin_id: "cbscode", admin_name: "naam"}
+    - id: "geom_1971"
+      path: "data/raw/NLD/nl_1971.geojson"
+      format: "geojson"
+      valid_years: [1970]
+      columns: {admin_id: "cbscode", admin_name: "naam"}
+    - id: "geom_1960"
+      path: "data/raw/NLD/nl_1960.geojson"
+      format: "geojson"
+      valid_years: [1960]
+      columns: {admin_id: "cbscode", admin_name: "naam"}
+    - id: "geom_1950"
+      path: "data/raw/NLD/nl_1950.geojson"
+      format: "geojson"
+      valid_years: [1950]
+      columns: {admin_id: "cbscode", admin_name: "naam"}
+    - id: "geom_1940"
+      path: "data/raw/NLD/nl_1940.geojson"
+      format: "geojson"
+      valid_years: [1940]
+      columns: {admin_id: "cbscode", admin_name: "naam"}
+    - id: "geom_1931"
+      path: "data/raw/NLD/nl_1931.geojson"
+      format: "geojson"
+      valid_years: [1930]
+      columns: {admin_id: "cbscode", admin_name: "naam"}
+    - id: "geom_1920"
+      path: "data/raw/NLD/nl_1920.geojson"
+      format: "geojson"
+      valid_years: [1920]
+      columns: {admin_id: "cbscode", admin_name: "naam"}
+    - id: "geom_1910"
+      path: "data/raw/NLD/nl_1910.geojson"
+      format: "geojson"
+      valid_years: [1910]
+      columns: {admin_id: "cbscode", admin_name: "naam"}
+    - id: "geom_1900"
+      path: "data/raw/NLD/nl_1900.geojson"
+      format: "geojson"
+      valid_years: [1900]
+      columns: {admin_id: "cbscode", admin_name: "naam"}
+    - id: "geom_1890"
+      path: "data/raw/NLD/nl_1890.geojson"
+      format: "geojson"
+      valid_years: [1890]
+      columns: {admin_id: "cbscode", admin_name: "naam"}
+    - id: "geom_1880"
+      path: "data/raw/NLD/nl_1880.geojson"
+      format: "geojson"
+      valid_years: [1880]
+      columns: {admin_id: "cbscode", admin_name: "naam"}
+    - id: "geom_1870"
+      path: "data/raw/NLD/nl_1870.geojson"
+      format: "geojson"
+      valid_years: [1870]
+      columns: {admin_id: "cbscode", admin_name: "naam"}
+    - id: "geom_1860"
+      path: "data/raw/NLD/nl_1860.geojson"
+      format: "geojson"
+      valid_years: [1860]
+      columns: {admin_id: "cbscode", admin_name: "naam"}
+    - id: "geom_1851"
+      path: "data/raw/NLD/nl_1851.geojson"
+      format: "geojson"
+      valid_years: [1850]
+      columns: {admin_id: "cbscode", admin_name: "naam"}
+
+
+
+assemblies:
+  - id: "main_panel"
+    target_unit_id: "ADM_HARM_V1"
+    tabular_recipe: {use_inputs: ["tab_main"], strategy: "single"}
+    geometry_recipe:
+      use_inputs: ["geom_1851", "geom_1860", "geom_1870", "geom_1880", "geom_1890", "geom_1900", "geom_1910", "geom_1920", "geom_1931", "geom_1940", "geom_1950", "geom_1960", "geom_1971", "geom_1990", "geom_2000", "geom_2010", "geom_2020"]
+      strategy: "by_year"
+      year_map: {1850: "geom_1851", 1860: "geom_1860", 1870: "geom_1870", 1880: "geom_1880", 1890: "geom_1890", 1900: "geom_1900", 1910: "geom_1910", 1920: "geom_1920", 1930: "geom_1931", 1940: "geom_1940", 1950: "geom_1950", 1960: "geom_1960", 1970: "geom_1971", 1990: "geom_1990", 2000: "geom_2000", 2010: "geom_2010", 2020: "geom_2020"}

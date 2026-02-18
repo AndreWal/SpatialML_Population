@@ -1,0 +1,5 @@
+crs:
+  canonical: "EPSG:6933"       # example equal-area global CRS
+  geographic: "EPSG:4326"      # optional export/web map CRS
+  area_crs: "EPSG:6933"        # for area-based metrics
+  distance_crs: "EPSG:6933"    # for distance metrics (or override per country)

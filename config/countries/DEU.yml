@@ -1,0 +1,36 @@
+country:
+  iso3: "DEU"
+  name: "Germany"
+  enabled: true
+
+input:
+  tabular:
+    path: "data/raw/DEU/Data_1890_1918.csv"
+    format: "csv"
+    delimiter: ","
+    encoding: "UTF-8"
+    columns:
+      admin_id: "Wahlkreis_Nummer"
+      admin_name: "Wahlkreis_Name"
+      year: "Jahr"
+      population: "pop"
+    year_filter: [1890, 1895, 1900, 1905, 1910]
+
+  geometry:
+    path: "data-raw/DEU/Shapefiles/GERMAN1895ELECTORALDISTRICTS.shp"
+    layer: null
+    columns:
+      admin_id: "OBJECTID"
+      admin_name: "DISTRICT"
+    source_crs: "EPSG:4326"
+
+harmonization:
+  #crosswalk_file: "config/crosswalks/DEU_admin_crosswalk.csv"
+  tabular_join_key: "Wahlkreis_Nummer"
+  polygon_join_key: "OBJECTID"
+  aggregation:
+    population: "sum"
+  unmatched_policy: "fail"   # fail | warn | drop
+
+qa_override:
+  join_coverage_min: 0.99

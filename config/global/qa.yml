@@ -1,0 +1,21 @@
+qa:
+  fail_fast: true
+
+  coverage:
+    join_coverage_min: 0.98
+    feature_non_missing_min: 0.95
+
+  geometry:
+    require_valid_geometry: true
+    auto_fix_invalid: true
+    allow_multipart: true
+
+  keys:
+    unique_key: ["country_code", "admin_unit_harmonized", "year"]
+    allow_duplicate_raw_admin: true
+
+  temporal:
+    allowed_years: [1850, 1860, 1870, 1880, 1890, 1900, 1910, 1920, 1930, 1940, 1950, 1960, 1970, 1980, 1990, 2000, 2010, 2020]
+
+  ranges:
+    population_min: 1

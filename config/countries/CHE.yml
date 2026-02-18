@@ -1,0 +1,37 @@
+country:
+  iso3: "CHE"
+  name: "Switzerland"
+  enabled: true
+
+input:
+  tabular:
+    path: "data/raw/CHE/census.csv"
+    format: "csv"
+    delimiter: ","
+    encoding: "UTF-8"
+    columns:
+      admin_id: "Gemeindenummer"
+      admin_name: "Gemeindename"
+      year: "Jahr"
+      population: "Zähleinheit"
+    population_filter: "Ständige Wohnbevölkerung - Total"
+    year_filter: [1850, 1860, 1870, 1888, 1900, 1910, 1920, 1930, 1941, 1950, 1960, 1970, 1980, 1990, 2000, 2010, 2020]
+
+  geometry:
+    path: "data-raw/CHE/Shapefile/g1g20.shp.shp"
+    layer: null
+    columns:
+      admin_id: "GMDNR"
+      admin_name: "GMDNAME"
+    source_crs: "EPSG:21781"
+
+harmonization:
+  crosswalk_file: "config/crosswalks/CHE_admin_crosswalk.csv"
+  tabular_join_key: "Gemeindenummer"
+  polygon_join_key: "GMDNR"
+  aggregation:
+    population: "sum"
+  unmatched_policy: "fail"   
+
+qa_override:
+  join_coverage_min: 0.99

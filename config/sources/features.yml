@@ -1,0 +1,5 @@
+features_registry:
+  - id: "elevation_mean"
+    type: "raster_zonal"
+    source_config: "config/sources/elevation.yml"
+    enabled: true
