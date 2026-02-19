@@ -9,6 +9,7 @@
         "/^sudo systemctl start docker 2>&1 \\|\\| sudo service docker start 2>&1; sleep 2; docker info 2>&1 \\| head -5$/": {
             "approve": true,
             "matchCommandLine": true
-        }
+        },
+        "docker compose": true
     }
 }

@@ -32,52 +32,14 @@ country_inputs_exist <- function(country_cfg, root_dir = ".") {
   all(tab_ok) && all(geom_ok)
 }
 
-default_mock_years <- function(country_cfg) {
-  years <- country_cfg$inputs$tabular[[1]]$year_filter %||%
-    country_cfg$inputs$tabular[[1]]$years %||%
-    c(2000L, 2010L)
-  as.integer(head(years, 2))
-}
-
-make_mock_country_panel <- function(country_cfg) {
-  country <- country_cfg$country$iso3 %||% "UNK"
-  years <- default_mock_years(country_cfg)
-  units <- data.frame(
-    admin_id_raw = c("1", "2"),
-    admin_name = c("Mock A", "Mock B"),
-    stringsAsFactors = FALSE
-  )
-  base <- merge(units, data.frame(year = years), all = TRUE)
-  base$population <- c(100, 200, 110, 210)[seq_len(nrow(base))]
-  base$country_code <- country
-
-  pt_a <- sf::st_point(c(8.5, 47.3))
-  pt_b <- sf::st_point(c(8.6, 47.4))
-  geom <- sf::st_sfc(rep(list(pt_a, pt_b), length.out = nrow(base)), crs = 4326)
-  sf::st_sf(base, geometry = geom)
-}
-
-read_country_inputs <- function(country_cfg, root_dir = ".", mock_mode = TRUE) {
+read_country_inputs <- function(country_cfg, root_dir = ".") {
   if (!country_inputs_exist(country_cfg, root_dir = root_dir)) {
-    if (isTRUE(mock_mode)) {
-      return(make_mock_country_panel(country_cfg))
-    }
     stop(sprintf("Missing raw input files for %s", country_cfg$country$iso3), call. = FALSE)
   }
-  panel <- tryCatch(
-    assemble_country_panel(country_cfg = country_cfg, root_dir = root_dir),
-    error = function(e) {
-      if (isTRUE(mock_mode)) return(make_mock_country_panel(country_cfg))
-      stop(e)
-    }
-  )
-  if (isTRUE(mock_mode) && any(sf::st_is_empty(panel))) {
-    return(make_mock_country_panel(country_cfg))
-  }
-  panel
+  assemble_country_panel(country_cfg = country_cfg, root_dir = root_dir)
 }
 
-read_crosswalk <- function(country_cfg, panel_sf, root_dir = ".", mock_mode = TRUE) {
+read_crosswalk <- function(country_cfg, panel_sf, root_dir = ".") {
   identity_crosswalk <- function() {
     ids <- unique(as.character(panel_sf$admin_id_raw))
     nms <- unique(as.character(panel_sf$admin_name))
@@ -106,7 +68,7 @@ read_crosswalk <- function(country_cfg, panel_sf, root_dir = ".", mock_mode = TR
     return(cw)
   }
 
-  if (!is.null(crosswalk_file) && !isTRUE(mock_mode)) {
+  if (!is.null(crosswalk_file)) {
     stop(sprintf("Crosswalk file not found for %s: %s", country_cfg$country$iso3, crosswalk_file), call. = FALSE)
   }
 
@@ -135,8 +97,8 @@ apply_unmatched_policy <- function(merged, policy = "fail", country = "UNK") {
   merged
 }
 
-harmonize_keys <- function(panel_sf, country_cfg, root_dir = ".", mock_mode = TRUE) {
-  cw <- read_crosswalk(country_cfg, panel_sf, root_dir = root_dir, mock_mode = mock_mode)
+harmonize_keys <- function(panel_sf, country_cfg, root_dir = ".") {
+  cw <- read_crosswalk(country_cfg, panel_sf, root_dir = root_dir)
   cw$from_admin_id <- as.character(cw$from_admin_id)
   cw$to_admin_id <- as.character(cw$to_admin_id)
   if (is.null(cw$weight)) cw$weight <- 1
@@ -311,5 +273,27 @@ write_country_outputs <- function(panel_sf, country_code, final_data_dir, root_d
 
   sf::st_write(panel_sf, gpkg_path, quiet = TRUE, delete_dsn = TRUE)
   arrow::write_parquet(sf::st_drop_geometry(panel_sf), parquet_path)
+  c(gpkg_path, parquet_path)
+}
+
+#' Write the global combined panel to data/final
+#'
+#' Saves all-country panel as a single GeoPackage and Parquet file under
+#' \code{data/final/global_panel.*}.
+#'
+#' @param combined_panel sf object combining all country panels.
+#' @param final_data_dir Relative path to the final data directory.
+#' @param root_dir Project root directory.
+#' @return Character vector of written file paths.
+write_global_panel <- function(combined_panel, final_data_dir = "data/final",
+                               root_dir = ".") {
+  out_dir <- file.path(root_dir, final_data_dir)
+  dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+  gpkg_path    <- file.path(out_dir, "global_panel.gpkg")
+  parquet_path <- file.path(out_dir, "global_panel.parquet")
+
+  sf::st_write(combined_panel, gpkg_path, quiet = TRUE, delete_dsn = TRUE)
+  arrow::write_parquet(sf::st_drop_geometry(combined_panel), parquet_path)
   c(gpkg_path, parquet_path)
 }

@@ -9,9 +9,12 @@ Produced per country after harmonization + CRS transform + feature extraction.
 | `country_code` | character | yes | ISO3 |
 | `admin_unit_harmonized` | character | yes | harmonized unit id |
 | `admin_name_harmonized` | character | yes | harmonized unit name |
-| `year` | integer | yes | panel year |
+| `year` | integer | yes | panel year; used as categorical ML feature |
 | `population` | numeric | yes | weighted/summed by crosswalk mapping |
 | `elevation_mean` | numeric | no | mean elevation (m), from raster zonal extraction |
+| `log_area` | numeric | yes | log1p of polygon area in m² (canonical CRS); derived via `sf::st_area()` |
+| `lon` | numeric | yes | WGS84 longitude of polygon centroid (degrees) |
+| `lat` | numeric | yes | WGS84 latitude of polygon centroid (degrees) |
 | `<feature_id>` | numeric | no | additional features per `config/sources/features.yml` |
 | `geometry` | geometry | yes | canonical CRS |
 
@@ -20,31 +23,56 @@ Primary key:
 
 ## ML outputs
 
-### CV summary (`models/cv_summary.csv`)
-| column | type | notes |
-|---|---|---|
-| `model_id` | character | e.g. "rf", "xgb" |
-| `engine` | character | e.g. "ranger", "xgboost" |
-| `rmse` | numeric | root mean squared error |
-| `mae` | numeric | mean absolute error |
-| `rsq` | numeric | R-squared |
+### `models/model_summary.csv` — **primary model comparison file**
+Long-format table: one row per model per evaluation split. The `eval_set` column
+makes the data provenance unambiguous.
 
-### Per-model fold details (`models/<model_id>_folds.csv`)
 | column | type | notes |
 |---|---|---|
-| `model_id` | character | model identifier |
+| `model_id` | character | e.g. "rf", "xgb", "cat" |
+| `engine` | character | e.g. "ranger", "xgboost", "catboost" |
+| `eval_set` | character | `"spatial_cv"` = held-out CV folds on training countries; `"test_holdout"` = never-seen holdout country |
+| `countries` | character | countries contributing observations to this evaluation (e.g. "NLD" for CV, "DEU" for test) |
+| `n_folds` | integer | number of spatial CV folds; `NA` for test_holdout |
+| `n_obs` | integer | total observations evaluated |
+| `rmse` | numeric | RMSE for this eval_set |
+| `mae` | numeric | MAE for this eval_set |
+| `rsq` | numeric | R² for this eval_set |
+
+### `models/cv_summary.csv` — spatial CV metrics only
+| column | type | notes |
+|---|---|---|
+| `model_id` | character | |
+| `engine` | character | |
+| `eval_set` | character | always `"spatial_cv"` |
+| `n_cv_folds` | integer | number of CV folds |
+| `n_cv_obs` | integer | training observations used |
+| `train_countries` | character | `+`-joined ISO3 codes |
+| `cv_rmse` | numeric | mean RMSE across held-out folds |
+| `cv_mae` | numeric | mean MAE across held-out folds |
+| `cv_rsq` | numeric | mean R² across held-out folds |
+
+### `models/<model_id>_folds.csv` — per-fold detail
+| column | type | notes |
+|---|---|---|
+| `model_id` | character | |
+| `split_type` | character | always `"spatial_cv_validation"` |
 | `fold` | integer | fold number |
-| `n_train` | integer | training set size |
-| `n_test` | integer | test set size |
-| `rmse` | numeric | fold RMSE |
-| `mae` | numeric | fold MAE |
-| `rsq` | numeric | fold R² |
+| `n_train` | integer | training set size for this fold |
+| `n_test` | integer | validation set size for this fold |
+| `fold_rmse` | numeric | RMSE on the held-out fold |
+| `fold_mae` | numeric | MAE on the held-out fold |
+| `fold_rsq` | numeric | R² on the held-out fold |
 
 ### Final models (`models/<model_id>_final.rds`)
-Serialized R model objects trained on all data.
+Serialized R model objects trained on **all non-holdout data**.
 
-### Prediction rasters (`data/final/<ISO3>/<ISO3>_prediction_<model_id>.tif`)
-GeoTIFF raster at configured resolution (default 1000m) in canonical CRS.
+### Prediction rasters (`data/final/predictions/global_<decade>_prediction_<model_id>.tif`)
+One GeoTIFF per decade (e.g. `global_1850_prediction_rf.tif` … `global_2020_prediction_rf.tif`).
+Decade = `floor(year / 10) * 10`. Each raster covers all enabled countries at the
+configured resolution (default 1000 m) in canonical CRS. The constant `year`,
+`lat`, `lon`, and `log_area` feature layers are baked into every raster before
+prediction.
 
 ## DuckDB intermediate store (`cache/panels.duckdb`)
 Tables: `panel_<iso3>` (per country), `panel_all` (combined).

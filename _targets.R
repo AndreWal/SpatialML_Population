@@ -13,7 +13,7 @@ source(file.path("R", "raster_predict.R"))
 source(file.path("R", "duckdb_store.R"))
 
 tar_option_set(
-  packages = c("yaml", "sf", "arrow", "terra", "ranger", "xgboost", "duckdb", "DBI")
+  packages = c("yaml", "sf", "arrow", "terra", "ranger", "xgboost", "catboost", "duckdb", "DBI", "CAST")
 )
 
 list(
@@ -21,8 +21,7 @@ list(
   tar_target(
     country_config_validation,
     validate_enabled_country_configs(
-      root_dir = ".",
-      mock_mode = TRUE
+      root_dir = "."
     )
   ),
   tar_target(
@@ -44,10 +43,6 @@ list(
   tar_target(
     ml_cfg,
     read_yaml_file(file.path("config", "global", "ml.yml"))
-  ),
-  tar_target(
-    mock_mode,
-    tolower(Sys.getenv("MOCK_MODE", "true")) %in% c("1", "true", "yes")
   ),
 
   # ── Feature registry ──────────────────────────────────────────
@@ -73,13 +68,13 @@ list(
   ),
   tar_target(
     country_panel_read,
-    read_country_inputs(country_cfg, root_dir = ".", mock_mode = mock_mode),
+    read_country_inputs(country_cfg, root_dir = "."),
     pattern = map(country_cfg),
     iteration = "list"
   ),
   tar_target(
     country_panel_harmonized,
-    harmonize_keys(country_panel_read, country_cfg, root_dir = ".", mock_mode = mock_mode),
+    harmonize_keys(country_panel_read, country_cfg, root_dir = "."),
     pattern = map(country_panel_read, country_cfg),
     iteration = "list"
   ),
@@ -119,8 +114,7 @@ list(
       panel_sf = country_panel_validated,
       feature_registry = feature_registry,
       canonical_crs = crs_cfg$crs$canonical,
-      root_dir = ".",
-      mock_mode = mock_mode
+      root_dir = "."
     ),
     pattern = map(country_panel_validated),
     iteration = "list"
@@ -145,6 +139,37 @@ list(
     do.call(rbind, country_panel_features)
   ),
 
+  # ── Global panel (all countries) ─────────────────────────────
+  tar_target(
+    global_panel_files,
+    write_global_panel(
+      combined_panel  = combined_panel,
+      final_data_dir  = paths_cfg$paths$final_data %||% "data/final",
+      root_dir        = "."
+    ),
+    format = "file"
+  ),
+
+  # ── Hold-out test split (DEU out, rest for training/CV) ───────
+  tar_target(
+    holdout_country,
+    ml_cfg$ml$holdout_test_country %||% "DEU"
+  ),
+  tar_target(
+    holdout_panel,
+    {
+      cc <- as.character(combined_panel$country_code)
+      combined_panel[cc == holdout_country, ]
+    }
+  ),
+  tar_target(
+    train_panel,
+    {
+      cc <- as.character(combined_panel$country_code)
+      combined_panel[cc != holdout_country, ]
+    }
+  ),
+
   # ── DuckDB intermediate store ─────────────────────────────────
   tar_target(
     duckdb_tables,
@@ -158,22 +183,22 @@ list(
     }
   ),
 
-  # ── Spatial CV folds ──────────────────────────────────────────
+  # ── Spatial CV folds (CAST, training countries only) ─────────
   tar_target(
     spatial_folds,
     create_spatial_folds(
-      panel_sf = combined_panel,
-      ml_cfg = ml_cfg,
-      seed = project_cfg$project$seed
+      panel_sf = train_panel,
+      ml_cfg   = ml_cfg,
+      seed     = project_cfg$project$seed
     )
   ),
 
-  # ── Prepare model data ────────────────────────────────────────
+  # ── Prepare model data (training countries only) ──────────────
   tar_target(
     model_data,
     prepare_model_data(
-      panel_sf = combined_panel,
-      ml_cfg = ml_cfg,
+      panel_sf         = train_panel,
+      ml_cfg           = ml_cfg,
       feature_registry = feature_registry
     )
   ),
@@ -183,8 +208,8 @@ list(
     model_specs,
     {
       specs <- ml_cfg$ml$models
-      # Filter to supported engines only (skip catboost in R-only mode)
-      supported <- c("ranger", "xgboost")
+      # Filter to supported engines only
+      supported <- c("ranger", "xgboost", "catboost")
       Filter(function(s) s$engine %in% supported, specs)
     }
   ),
@@ -198,9 +223,9 @@ list(
         res <- run_spatial_cv(
           model_spec = spec,
           model_data = model_data,
-          folds = spatial_folds,
-          ml_cfg = ml_cfg,
-          seed = project_cfg$project$seed
+          folds      = spatial_folds,
+          ml_cfg     = ml_cfg,
+          seed       = project_cfg$project$seed
         )
         results[[length(results) + 1]] <- res
       }
@@ -213,8 +238,9 @@ list(
     cv_output_files,
     save_cv_results(
       cv_results_list = cv_results,
-      output_dir = paths_cfg$paths$models,
-      root_dir = "."
+      output_dir      = paths_cfg$paths$models,
+      root_dir        = ".",
+      train_countries = unique(as.character(train_panel$country_code))
     ),
     format = "file"
   ),
@@ -228,38 +254,67 @@ list(
   # ── CV summary ────────────────────────────────────────────────
   tar_target(
     cv_summary,
-    summarize_cv_results(cv_results)
+    summarize_cv_results(
+      cv_results,
+      train_countries = unique(as.character(train_panel$country_code))
+    )
   ),
 
+  # ── Hold-out evaluation on DEU ────────────────────────────────
+  tar_target(
+    holdout_metrics,
+    evaluate_holdout(
+      best_cv_result   = best_model,
+      holdout_panel_sf = holdout_panel,
+      ml_cfg           = ml_cfg,
+      feature_registry = feature_registry
+    )
+  ),
+  # ── Combined model summary (CV + holdout in one CSV) ───────────────
+  tar_target(
+    model_summary_file,
+    write_model_summary(
+      cv_results_list      = cv_results,
+      holdout_metrics_list = holdout_metrics,
+      train_countries      = unique(as.character(train_panel$country_code)),
+      output_dir           = paths_cfg$paths$models,
+      root_dir             = "."
+    ),
+    format = "file"
+  ),
   # ── MLflow logging ────────────────────────────────────────────
   tar_target(
     mlflow_logged,
     log_all_model_runs(
       cv_results_list = cv_results,
-      ml_cfg = ml_cfg,
-      project_cfg = project_cfg,
-      model_dir = file.path(".", paths_cfg$paths$models)
+      ml_cfg          = ml_cfg,
+      project_cfg     = project_cfg,
+      model_dir       = file.path(".", paths_cfg$paths$models)
     )
   ),
 
-  # ── Raster predictions (per country) ──────────────────────────
+  # ── Raster predictions: one GeoTIFF per decade → data/final/predictions/ ──
+  #
+  # The `year` column already contains round decade values (1850, 1860, …).
+  # Each raster sets year_<decade>=1 and all other year dummies to 0, exactly
+  # mirroring how the training feature matrix was constructed.
   tar_target(
     prediction_rasters,
     {
-      paths <- character(0)
-      cc_vec <- as.character(combined_panel$country_code)
-      for (code in unique(cc_vec)) {
-        p <- combined_panel[cc_vec == code, ]
+      decades   <- sort(unique(as.integer(combined_panel$year)))
+      out_dir   <- paths_cfg$paths$predictions %||% "data/final/predictions"
+      paths     <- character(0)
+      for (decade in decades) {
         path <- run_raster_prediction(
-          best_cv_result = best_model,
-          panel_sf = p,
+          best_cv_result   = best_model,
+          panel_sf         = combined_panel,
           feature_registry = feature_registry,
-          ml_cfg = ml_cfg,
-          canonical_crs = crs_cfg$crs$canonical,
-          country_code = code,
-          output_dir = paths_cfg$paths$final_data,
-          root_dir = ".",
-          mock_mode = mock_mode
+          ml_cfg           = ml_cfg,
+          canonical_crs    = crs_cfg$crs$canonical,
+          prediction_year  = decade,
+          label            = paste0("global_", decade),
+          output_dir       = out_dir,
+          root_dir         = "."
         )
         paths <- c(paths, path)
       }

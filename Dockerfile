@@ -20,12 +20,40 @@ COPY renv.lock renv.lock
 COPY .Rprofile .Rprofile
 COPY renv/activate.R renv/activate.R
 
-# Configure renv to use Posit Package Manager for fast binary installs
-ENV RENV_CONFIG_REPOS_OVERRIDE="https://packagemanager.posit.co/cran/__linux__/noble/latest"
 ENV RENV_CONFIG_CACHE_ENABLED=FALSE
 
-# Restore R packages from lockfile
-RUN R -q -e "renv::restore(prompt = FALSE)"
+# Redirect the "CRAN" repo to PPM's Ubuntu-noble binary mirror.
+# renv.lock tags most packages as Repository: CRAN; pointing CRAN at PPM
+# means those are installed as pre-built Linux binaries instead of being
+# compiled from source, which avoids transient CRAN mirror failures and
+# is significantly faster.  Raise the download timeout for large packages.
+RUN echo 'options(repos = c(CRAN = "https://packagemanager.posit.co/cran/__linux__/noble/latest"), timeout = 300)' \
+    >> /usr/local/lib/R/etc/Rprofile.site
+
+# Install CatBoost from the official GitHub Linux binary release.
+# This is done as a separate layer before renv::restore() because:
+#   - catboost is not on CRAN/PPM (no binary mirror available)
+#   - the archive is ~130 MB and benefits from its own retry logic
+#   - once installed here, renv::restore() recognises it and skips reinstall
+ARG CATBOOST_VERSION=1.2.9
+RUN for i in 1 2 3; do \
+        curl -fsSL -o /tmp/catboost.tgz \
+          "https://github.com/catboost/catboost/releases/download/v${CATBOOST_VERSION}/catboost-R-Linux-${CATBOOST_VERSION}.tgz" \
+        && R CMD INSTALL /tmp/catboost.tgz \
+        && rm /tmp/catboost.tgz \
+        && break; \
+        echo "catboost download attempt $i failed, retrying..." >&2; \
+        sleep 15; \
+    done
+
+# Restore R packages from lockfile.
+# Retries up to 5 times with back-off to handle transient download errors;
+# already-installed packages are skipped on each subsequent attempt.
+RUN for i in 1 2 3 4 5; do \
+        R -q -e "renv::restore(prompt = FALSE)" && break; \
+        echo "renv::restore attempt $i failed, retrying in 20 s..." >&2; \
+        sleep 20; \
+    done
 
 # ---- Stage 2: Copy project files and validate ----
 FROM base AS project
@@ -44,11 +72,12 @@ COPY CLAUDE.md CLAUDE.md
 # Create data directories (raw data is mounted at runtime, not baked in)
 RUN mkdir -p data/raw data/intermediate data/final logs models cache
 
-# Default: run pipeline in mock mode (no raw data needed)
-ENV MOCK_MODE=true
-
 # Validate that packages restore correctly
-RUN R -q -e "renv::restore(prompt = FALSE)" \
+RUN for i in 1 2 3 4 5; do \
+        R -q -e "renv::restore(prompt = FALSE)" && break; \
+        echo "renv::restore attempt $i failed, retrying in 20 s..." >&2; \
+        sleep 20; \
+    done \
     && R -q -e "library(sf); library(terra); library(arrow); library(duckdb); library(targets); cat('All packages OK\n')"
 
 CMD ["R", "-q", "-e", "targets::tar_make()"]

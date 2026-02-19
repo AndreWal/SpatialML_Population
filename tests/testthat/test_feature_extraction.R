@@ -24,22 +24,6 @@ features_registry:
   expect_equal(reg[[1]]$id, "elevation_mean")
 })
 
-test_that("make_mock_raster creates deterministic raster", {
-  pts <- sf::st_sfc(
-    sf::st_point(c(8.5, 47.3)),
-    sf::st_point(c(8.6, 47.4)),
-    crs = 4326
-  )
-  panel <- sf::st_sf(id = 1:2, geometry = pts)
-
-  r1 <- make_mock_raster(panel, feature_id = "elev", canonical_crs = "EPSG:3035")
-  r2 <- make_mock_raster(panel, feature_id = "elev", canonical_crs = "EPSG:3035")
-
-  expect_s4_class(r1, "SpatRaster")
-  expect_equal(terra::values(r1), terra::values(r2))
-  expect_equal(names(r1), "elev")
-})
-
 test_that("extract_zonal_stat works with points", {
   pts <- sf::st_sfc(
     sf::st_point(c(0, 0)),
@@ -48,14 +32,21 @@ test_that("extract_zonal_stat works with points", {
   )
   panel <- sf::st_sf(id = 1:2, geometry = pts)
 
-  r <- make_mock_raster(panel, feature_id = "test_feat", canonical_crs = "EPSG:3035")
+  # Create a simple raster covering the point extent
+  r <- terra::rast(
+    terra::ext(-5000, 10000, -5000, 10000),
+    nrows = 3L, ncols = 3L,
+    crs = "EPSG:3035"
+  )
+  terra::values(r) <- seq_len(terra::ncell(r)) * 10.0
+  names(r) <- "test_feat"
   vals <- extract_zonal_stat(r, panel, stat = "mean", feature_col = "test_feat")
 
   expect_length(vals, 2)
   expect_true(is.numeric(vals))
 })
 
-test_that("extract_and_join_features adds feature columns", {
+test_that("extract_and_join_features errors on missing source_config", {
   pts <- sf::st_sfc(
     sf::st_point(c(0, 0)),
     sf::st_point(c(5000, 5000)),
@@ -73,16 +64,15 @@ test_that("extract_and_join_features adds feature columns", {
     list(id = "mock_feat", source_config = "nonexistent.yml", enabled = TRUE)
   )
 
-  result <- extract_and_join_features(
-    panel_sf = panel,
-    feature_registry = registry,
-    canonical_crs = "EPSG:3035",
-    root_dir = ".",
-    mock_mode = TRUE
+  expect_error(
+    extract_and_join_features(
+      panel_sf = panel,
+      feature_registry = registry,
+      canonical_crs = "EPSG:3035",
+      root_dir = "."
+    ),
+    "not found"
   )
-
-  expect_true("mock_feat" %in% names(result))
-  expect_equal(nrow(result), 2)
 })
 
 test_that("extract_and_join_features returns panel unchanged with empty registry", {

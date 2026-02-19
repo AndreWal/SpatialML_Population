@@ -3,7 +3,7 @@ source(file.path("..", "..", "R", "io_readers.R"))
 source(file.path("..", "..", "R", "assembly.R"))
 source(file.path("..", "..", "R", "pipeline_country.R"))
 
-testthat::test_that("read_country_inputs falls back to mock data", {
+testthat::test_that("read_country_inputs stops when raw files are missing", {
   cfg <- normalize_country_config(
     list(
       country = list(iso3 = "TST", enabled = TRUE),
@@ -23,10 +23,10 @@ testthat::test_that("read_country_inputs falls back to mock data", {
     file_country = "TST"
   )
 
-  panel <- read_country_inputs(cfg, root_dir = tempdir(), mock_mode = TRUE)
-  testthat::expect_s3_class(panel, "sf")
-  testthat::expect_true(nrow(panel) > 0)
-  testthat::expect_true(all(c("admin_id_raw", "year", "population") %in% names(panel)))
+  testthat::expect_error(
+    read_country_inputs(cfg, root_dir = tempdir()),
+    "Missing raw input files"
+  )
 })
 
 testthat::test_that("harmonize_keys applies crosswalk and aggregates many-to-one", {
@@ -61,7 +61,7 @@ testthat::test_that("harmonize_keys applies crosswalk and aggregates many-to-one
     "TST"
   )
 
-  out <- harmonize_keys(panel, cfg, root_dir = root, mock_mode = FALSE)
+  out <- harmonize_keys(panel, cfg, root_dir = root)
   testthat::expect_s3_class(out, "sf")
   testthat::expect_equal(nrow(out), 1)
   testthat::expect_equal(out$admin_unit_harmonized[[1]], "10")
@@ -108,11 +108,11 @@ testthat::test_that("harmonize_keys respects unmatched policy", {
     ),
     "TST"
   )
-  testthat::expect_error(harmonize_keys(panel, cfg_fail, root_dir = root, mock_mode = FALSE), "unmatched")
+  testthat::expect_error(harmonize_keys(panel, cfg_fail, root_dir = root), "unmatched")
 
   cfg_drop <- cfg_fail
   cfg_drop$harmonization$unmatched_policy <- "drop"
-  dropped <- harmonize_keys(panel, cfg_drop, root_dir = root, mock_mode = FALSE)
+  dropped <- harmonize_keys(panel, cfg_drop, root_dir = root)
   testthat::expect_equal(nrow(dropped), 1)
 })
 

@@ -31,69 +31,18 @@ load_source_config <- function(source_config, root_dir = ".") {
   yaml::read_yaml(path, eval.expr = FALSE)
 }
 
-#' Create a deterministic mock raster for testing
+#' Load a raster from disk
 #'
-#' Covers the bounding box of the provided sf object with spatially varying
-#' synthetic values. Used when real raster data is unavailable (MOCK_MODE).
-#'
-#' @param panel_sf sf object to derive extent from.
-#' @param feature_id Feature identifier (seeds the values).
-#' @param resolution_m Approximate resolution in metres.
-#' @param canonical_crs CRS string for output.
-#' @return A terra SpatRaster.
-make_mock_raster <- function(panel_sf, feature_id = "mock",
-                             resolution_m = 1000, canonical_crs = "EPSG:3035") {
-  panel_proj <- sf::st_transform(panel_sf, canonical_crs)
-
-  # Filter out empty geometries for bbox calculation
-  non_empty <- !sf::st_is_empty(panel_proj)
-  if (any(non_empty)) {
-    bbox <- sf::st_bbox(panel_proj[non_empty, ])
-  } else {
-    # Fallback: create a small raster around the origin of the CRS
-    bbox <- c(xmin = -10000, ymin = -10000, xmax = 10000, ymax = 10000)
-    names(bbox) <- c("xmin", "ymin", "xmax", "ymax")
-  }
-
-  # Guard against NA or degenerate bbox
-  if (any(is.na(bbox))) {
-    bbox <- c(xmin = -10000, ymin = -10000, xmax = 10000, ymax = 10000)
-    names(bbox) <- c("xmin", "ymin", "xmax", "ymax")
-  }
-
-  # Buffer extent slightly so polygons are fully covered
-  dx <- (bbox["xmax"] - bbox["xmin"]) * 0.1 + resolution_m
-  dy <- (bbox["ymax"] - bbox["ymin"]) * 0.1 + resolution_m
-  ext <- terra::ext(
-    bbox["xmin"] - dx, bbox["xmax"] + dx,
-    bbox["ymin"] - dy, bbox["ymax"] + dy
-  )
-
-  ncol <- max(5L, as.integer(ceiling((ext[2] - ext[1]) / resolution_m)))
-  nrow <- max(5L, as.integer(ceiling((ext[4] - ext[3]) / resolution_m)))
-
-  r <- terra::rast(ext, nrows = nrow, ncols = ncol, crs = canonical_crs)
-
-  # Deterministic fill based on feature_id hash
-  seed_val <- sum(utf8ToInt(feature_id))
-  set.seed(seed_val)
-  terra::values(r) <- runif(terra::ncell(r), min = 0, max = 1000)
-  names(r) <- feature_id
-  r
-}
-
-#' Load a raster from disk or create a mock
+#' Tries the processed path first, then the raw path (directory with .tif tiles).
+#' Stops with an informative error if neither path yields a raster file.
 #'
 #' @param source_cfg Parsed source config list.
 #' @param feature_entry Feature registry entry.
-#' @param panel_sf sf panel for mock extent.
 #' @param canonical_crs Canonical CRS string.
 #' @param root_dir Project root.
-#' @param mock_mode Logical; use mock if raster not found.
 #' @return A terra SpatRaster.
-load_or_mock_raster <- function(source_cfg, feature_entry, panel_sf,
-                                canonical_crs = "EPSG:3035",
-                                root_dir = ".", mock_mode = TRUE) {
+load_raster <- function(source_cfg, feature_entry,
+                        canonical_crs = "EPSG:3035", root_dir = ".") {
   processed_path <- file.path(root_dir, source_cfg$storage$processed_path %||% "")
   raw_path <- file.path(root_dir, source_cfg$storage$raw_path %||% "")
 
@@ -102,40 +51,29 @@ load_or_mock_raster <- function(source_cfg, feature_entry, panel_sf,
   if (nzchar(processed_path) && file.exists(processed_path) && !dir.exists(processed_path)) {
     raster_path <- processed_path
   } else if (nzchar(raw_path) && file.exists(raw_path)) {
-    # raw_path might be a directory with tiles
     tif_files <- list.files(raw_path, pattern = "\\.tif$", full.names = TRUE, recursive = TRUE)
     if (length(tif_files) > 0) {
       raster_path <- tif_files[1]
     }
   }
 
-  if (!is.null(raster_path)) {
-    r <- terra::rast(raster_path)
-    # Reproject to canonical CRS if needed
-    if (!identical(terra::crs(r, describe = TRUE)$code, sf::st_crs(canonical_crs)$epsg)) {
-      r <- terra::project(r, canonical_crs)
-    }
-    return(r)
+  if (is.null(raster_path)) {
+    stop(
+      sprintf(
+        "Raster not found for feature '%s'. Checked processed='%s', raw='%s'.",
+        feature_entry$id %||% "?",
+        source_cfg$storage$processed_path %||% "(none)",
+        source_cfg$storage$raw_path %||% "(none)"
+      ),
+      call. = FALSE
+    )
   }
 
-  if (isTRUE(mock_mode)) {
-    return(make_mock_raster(
-      panel_sf,
-      feature_id = feature_entry$id %||% "mock",
-      canonical_crs = canonical_crs
-    ))
+  r <- terra::rast(raster_path)
+  if (!identical(terra::crs(r, describe = TRUE)$code, sf::st_crs(canonical_crs)$epsg)) {
+    r <- terra::project(r, canonical_crs)
   }
-
-  warning(
-    sprintf("Raster not found for feature '%s'; using mock raster as fallback",
-            feature_entry$id),
-    call. = FALSE
-  )
-  make_mock_raster(
-    panel_sf,
-    feature_id = feature_entry$id %||% "mock",
-    canonical_crs = canonical_crs
-  )
+  r
 }
 
 #' Extract zonal statistics from a raster for admin polygons
@@ -172,20 +110,52 @@ extract_zonal_stat <- function(raster, panel_sf, stat = "mean", feature_col = "f
   result
 }
 
+#' Compute and attach geometric features
+#'
+#' Appends three derived columns to the panel:
+#' \describe{
+#'   \item{\code{log_area}}{log1p of polygon area in m², via \code{sf::st_area()}
+#'     in the canonical projected CRS.}
+#'   \item{\code{lon}}{WGS84 longitude of the polygon centroid (degrees).}
+#'   \item{\code{lat}}{WGS84 latitude  of the polygon centroid (degrees).}
+#' }
+#'
+#' @param panel_sf sf object in a metric projected CRS (e.g. EPSG:3035).
+#' @return sf object with \code{log_area}, \code{lon}, \code{lat} appended.
+add_geometric_features <- function(panel_sf) {
+  # log_area
+  areas <- tryCatch(
+    as.numeric(sf::st_area(panel_sf)),
+    error = function(e) rep(NA_real_, nrow(panel_sf))
+  )
+  panel_sf$log_area <- log1p(areas)
+
+  # lat / lon: centroid coordinates reprojected to WGS84
+  centroids_wgs84 <- tryCatch(
+    sf::st_transform(sf::st_centroid(sf::st_geometry(panel_sf)), "EPSG:4326"),
+    error = function(e) sf::st_centroid(sf::st_geometry(panel_sf))
+  )
+  coords <- sf::st_coordinates(centroids_wgs84)
+  panel_sf$lon <- coords[, "X"]
+  panel_sf$lat <- coords[, "Y"]
+
+  panel_sf
+}
+
 #' Extract all enabled features and join to panel
 #'
-#' Iterates over the feature registry, loads/mocks rasters, extracts zonal
+#' Iterates over the feature registry, loads rasters, extracts zonal
 #' statistics, and joins them as columns to the panel sf object.
+#' After raster extraction, geometric features (\code{log_area}) are appended.
 #'
 #' @param panel_sf sf country panel (in canonical CRS, validated geometry).
 #' @param feature_registry List of enabled feature entries from features.yml.
 #' @param canonical_crs Canonical CRS string.
 #' @param root_dir Project root.
-#' @param mock_mode Logical.
-#' @return sf object with feature columns appended.
+#' @return sf object with feature columns and \code{log_area} appended.
 extract_and_join_features <- function(panel_sf, feature_registry,
                                       canonical_crs = "EPSG:3035",
-                                      root_dir = ".", mock_mode = TRUE) {
+                                      root_dir = ".") {
   if (length(feature_registry) == 0) {
     return(panel_sf)
   }
@@ -199,21 +169,13 @@ extract_and_join_features <- function(panel_sf, feature_registry,
       next
     }
 
-    source_cfg <- tryCatch(
-      load_source_config(source_config, root_dir = root_dir),
-      error = function(e) {
-        if (isTRUE(mock_mode)) return(list())
-        stop(e)
-      }
-    )
+    source_cfg <- load_source_config(source_config, root_dir = root_dir)
 
-    raster <- load_or_mock_raster(
+    raster <- load_raster(
       source_cfg = source_cfg,
       feature_entry = feature_entry,
-      panel_sf = panel_sf,
       canonical_crs = canonical_crs,
-      root_dir = root_dir,
-      mock_mode = mock_mode
+      root_dir = root_dir
     )
 
     stat <- source_cfg$processing$zonal_stat %||% "mean"
@@ -224,6 +186,9 @@ extract_and_join_features <- function(panel_sf, feature_registry,
       feature_col = feature_id
     )
   }
+
+  # Always append derived geometric features
+  panel_sf <- add_geometric_features(panel_sf)
 
   panel_sf
 }

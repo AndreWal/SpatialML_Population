@@ -14,8 +14,7 @@ Build a reproducible, multi-country geospatial dataset and train spatially aware
 
 ## Runtime behavior
 - Enabled countries come from `config/global/project.yml::countries.enabled`.
-- If raw files are missing and `MOCK_MODE=true` (default), pipeline uses deterministic mock inputs.
-- If `MOCK_MODE=false`, missing raw files fail the run.
+- Missing raw files fail the run — no mock fallback exists.
 
 ## Country pipeline contract
 For each country, pipeline runs these pure stages:

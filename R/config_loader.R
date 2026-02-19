@@ -10,10 +10,6 @@ is_single_input_object <- function(x) {
   is_named_list(x) && any(c("path", "format", "columns") %in% names(x))
 }
 
-path_is_raw_data <- function(path) {
-  grepl("^data/raw/", path) || grepl("^data-raw/", path)
-}
-
 new_issue <- function(country, section, field, message) {
   list(
     country = country %||% "UNKNOWN",
@@ -135,7 +131,7 @@ validate_strategy_name <- function(country, section, field, strategy) {
   NULL
 }
 
-validate_input_entry <- function(entry, country, input_type, idx, root_dir, mock_mode) {
+validate_input_entry <- function(entry, country, input_type, idx, root_dir) {
   issues <- list()
   section <- paste0("inputs.", input_type, "[", idx, "]")
 
@@ -173,16 +169,14 @@ validate_input_entry <- function(entry, country, input_type, idx, root_dir, mock
   }
 
   if (!is.null(entry$path) && is.character(entry$path) && nzchar(entry$path)) {
-    if (!(mock_mode && path_is_raw_data(entry$path))) {
-      full_path <- file.path(root_dir, entry$path)
-      if (!file.exists(full_path)) {
-        issues[[length(issues) + 1]] <- new_issue(
-          country,
-          section,
-          "path",
-          sprintf("file does not exist: %s", entry$path)
-        )
-      }
+    full_path <- file.path(root_dir, entry$path)
+    if (!file.exists(full_path)) {
+      issues[[length(issues) + 1]] <- new_issue(
+        country,
+        section,
+        "path",
+        sprintf("file does not exist: %s", entry$path)
+      )
     }
   }
 
@@ -349,7 +343,6 @@ validate_country_configs <- function(
   countries_dir = file.path("config", "countries"),
   root_dir = ".",
   countries = NULL,
-  mock_mode = FALSE,
   features_file = file.path("config", "sources", "features.yml")
 ) {
   files <- list.files(
@@ -408,7 +401,7 @@ validate_country_configs <- function(
           }
         }
         for (i in seq_along(entries)) {
-          entry_issues <- validate_input_entry(entries[[i]], country, input_type, i, root_dir, mock_mode)
+          entry_issues <- validate_input_entry(entries[[i]], country, input_type, i, root_dir)
           issues <- c(issues, entry_issues)
         }
       }
@@ -444,7 +437,6 @@ read_enabled_countries <- function(project_file = file.path("config", "global", 
 
 validate_enabled_country_configs <- function(
   root_dir = ".",
-  mock_mode = TRUE,
   project_file = file.path("config", "global", "project.yml"),
   countries_dir = file.path("config", "countries"),
   features_file = file.path("config", "sources", "features.yml")
@@ -454,7 +446,6 @@ validate_enabled_country_configs <- function(
     countries_dir = countries_dir,
     root_dir = root_dir,
     countries = enabled,
-    mock_mode = mock_mode,
     features_file = features_file
   )
   TRUE

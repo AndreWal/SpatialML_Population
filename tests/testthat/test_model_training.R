@@ -69,8 +69,30 @@ test_that("train_model dispatches correctly", {
   expect_true(inherits(xgb, "xgb.Booster"))
 })
 
+test_that("train_catboost produces predictions", {
+  skip_if_not_installed("catboost")
+  set.seed(42)
+  X <- data.frame(x1 = rnorm(50), x2 = rnorm(50))
+  y <- X$x1 * 2 + X$x2 + rnorm(50, sd = 0.1)
+
+  model <- train_catboost(X, y, seed = 42)
+  preds <- predict_model(model, X)
+
+  expect_length(preds, 50)
+  expect_true(cor(y, preds) > 0.5)
+})
+
+test_that("train_model dispatches catboost correctly", {
+  skip_if_not_installed("catboost")
+  X <- data.frame(x = 1:20)
+  y <- (1:20) * 2
+
+  cat <- train_model("catboost", X, y)
+  expect_true(inherits(cat, "catboost.Model"))
+})
+
 test_that("train_model errors on unsupported engine", {
-  expect_error(train_model("catboost", data.frame(x = 1), 1), "Unsupported")
+  expect_error(train_model("unknown_engine", data.frame(x = 1), 1), "Unsupported")
 })
 
 test_that("summarize_cv_results builds data.frame", {

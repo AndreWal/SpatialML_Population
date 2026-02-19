@@ -1,6 +1,6 @@
 source(file.path("..", "..", "R", "config_loader.R"))
 
-testthat::test_that("validator passes for a minimal valid config in mock mode", {
+testthat::test_that("validator passes for a minimal valid config", {
   root <- file.path(tempdir(), paste0("cfg_", as.integer(stats::runif(1, 1, 1e9))))
   dir.create(root, recursive = TRUE, showWarnings = FALSE)
   dir.create(file.path(root, "config", "countries"), recursive = TRUE, showWarnings = FALSE)
@@ -69,12 +69,17 @@ testthat::test_that("validator passes for a minimal valid config in mock mode", 
     file.path(root, "config", "countries", "TST.yml")
   )
 
+  # Create the data files that the config references
+  dir.create(file.path(root, "data", "raw", "TST"), recursive = TRUE, showWarnings = FALSE)
+  writeLines("id,name,year,population", file.path(root, "data", "raw", "TST", "panel.csv"))
+  writeLines('{"type":"FeatureCollection","features":[]}',
+             file.path(root, "data", "raw", "TST", "admin.geojson"))
+
   testthat::expect_silent(
     validate_country_configs(
       countries_dir = file.path("config", "countries"),
       root_dir = root,
       countries = "TST",
-      mock_mode = TRUE,
       features_file = file.path("config", "sources", "features.yml")
     )
   )
@@ -125,12 +130,17 @@ testthat::test_that("validator errors when assembly references missing input id"
     file.path(root, "config", "countries", "BAD.yml")
   )
 
+  # Create the data files that the config references
+  dir.create(file.path(root, "data", "raw", "BAD"), recursive = TRUE, showWarnings = FALSE)
+  writeLines("id,name,year,population", file.path(root, "data", "raw", "BAD", "panel.csv"))
+  writeLines('{"type":"FeatureCollection","features":[]}',
+             file.path(root, "data", "raw", "BAD", "admin.geojson"))
+
   testthat::expect_error(
     validate_country_configs(
       countries_dir = file.path("config", "countries"),
       root_dir = root,
       countries = "BAD",
-      mock_mode = TRUE,
       features_file = file.path("config", "sources", "features.yml")
     ),
     regexp = "country=BAD.*section=assemblies\\[1\\].*field=tabular_recipe.use_inputs"

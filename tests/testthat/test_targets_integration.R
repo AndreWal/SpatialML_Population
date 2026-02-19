@@ -1,4 +1,4 @@
-testthat::test_that("toy project tar_make works in mock mode", {
+testthat::test_that("toy project tar_make runs end-to-end", {
   testthat::skip_if_not_installed("callr")
   root <- file.path(tempdir(), paste0("tar_proj_", as.integer(stats::runif(1, 1, 1e9))))
   dir.create(root, recursive = TRUE, showWarnings = FALSE)
@@ -7,6 +7,7 @@ testthat::test_that("toy project tar_make works in mock mode", {
   dir.create(file.path(root, "config", "global"), recursive = TRUE, showWarnings = FALSE)
   dir.create(file.path(root, "config", "sources"), recursive = TRUE, showWarnings = FALSE)
   dir.create(file.path(root, "config", "crosswalks"), recursive = TRUE, showWarnings = FALSE)
+  dir.create(file.path(root, "data", "raw", "TST"), recursive = TRUE, showWarnings = FALSE)
 
   file.copy(file.path("..", "..", "_targets.R"), file.path(root, "_targets.R"))
   file.copy(file.path("..", "..", "R", "config_loader.R"), file.path(root, "R", "config_loader.R"))
@@ -20,6 +21,27 @@ testthat::test_that("toy project tar_make works in mock mode", {
   file.copy(file.path("..", "..", "R", "mlflow_utils.R"), file.path(root, "R", "mlflow_utils.R"))
   file.copy(file.path("..", "..", "R", "raster_predict.R"), file.path(root, "R", "raster_predict.R"))
   file.copy(file.path("..", "..", "R", "duckdb_store.R"), file.path(root, "R", "duckdb_store.R"))
+
+  # --- Minimal real raw data files ---
+  writeLines(
+    c("id,name,year,population",
+      "1,A,2000,100", "1,A,2010,110",
+      "2,B,2000,200", "2,B,2010,210"),
+    file.path(root, "data", "raw", "TST", "panel.csv")
+  )
+  writeLines(
+    paste0(
+      '{"type":"FeatureCollection","features":[',
+      '{"type":"Feature","properties":{"id":"1","name":"A"},',
+      '"geometry":{"type":"Polygon","coordinates":[',
+      '[[8.0,47.0],[8.1,47.0],[8.1,47.1],[8.0,47.1],[8.0,47.0]]]}},',
+      '{"type":"Feature","properties":{"id":"2","name":"B"},',
+      '"geometry":{"type":"Polygon","coordinates":[',
+      '[[8.1,47.0],[8.2,47.0],[8.2,47.1],[8.1,47.1],[8.1,47.0]]]}}'
+    , ']}'
+    ),
+    file.path(root, "data", "raw", "TST", "admin.geojson")
+  )
 
   writeLines(
     c(
@@ -79,12 +101,13 @@ testthat::test_that("toy project tar_make works in mock mode", {
     ),
     file.path(root, "config", "global", "ml.yml")
   )
+  # No raster sources in the test: elevation_mean is disabled
   writeLines(
     c(
       "features_registry:",
       "  - id: \"elevation_mean\"",
       "    source_config: \"config/sources/elevation.yml\"",
-      "    enabled: true"
+      "    enabled: false"
     ),
     file.path(root, "config", "sources", "features.yml")
   )
@@ -143,7 +166,6 @@ testthat::test_that("toy project tar_make works in mock mode", {
   res <- callr::r(
     func = function(project_root) {
       setwd(project_root)
-      Sys.setenv(MOCK_MODE = "true")
       targets::tar_make(reporter = "silent")
       gpkg <- file.path(project_root, "data", "final", "TST", "TST_panel.gpkg")
       parquet <- file.path(project_root, "data", "final", "TST", "TST_panel.parquet")

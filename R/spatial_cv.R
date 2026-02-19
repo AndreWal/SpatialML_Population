@@ -2,10 +2,11 @@
   if (is.null(x)) y else x
 }
 
-#' Create spatial block folds for cross-validation
+#' Create spatial block folds for cross-validation using CAST
 #'
-#' Divides the study area into regular blocks and assigns each block to a fold.
-#' Observations are assigned to the fold of the block their centroid falls in.
+#' Clusters observations into spatial k-means blocks and then uses
+#' \code{CAST::CreateSpacetimeFolds} to produce balanced,
+#' spatially-aware CV splits.
 #'
 #' @param panel_sf sf object with geometries (must have a projected CRS).
 #' @param ml_cfg Parsed ML config list from ml.yml.
@@ -13,27 +14,37 @@
 #' @return Integer vector of fold assignments (same length as nrow(panel_sf)).
 create_spatial_folds <- function(panel_sf, ml_cfg, seed = 42L) {
   n_folds <- ml_cfg$ml$split$folds %||% 5L
-  block_size_km <- ml_cfg$ml$split$block_size_km %||% 100
-  block_size_m <- block_size_km * 1000
 
   # Get centroids in the projected CRS
   centroids <- sf::st_coordinates(sf::st_centroid(sf::st_geometry(panel_sf)))
 
-  # Create grid cell indices for each centroid
-  x_idx <- floor(centroids[, 1] / block_size_m)
-  y_idx <- floor(centroids[, 2] / block_size_m)
-  block_id <- paste(x_idx, y_idx, sep = "_")
-
-  # Assign each unique block to a fold
-
-  unique_blocks <- unique(block_id)
+  # K-means spatial clustering: more clusters than folds so CAST can balance them
+  n_clusters <- min(n_folds * 5L, nrow(centroids))
+  n_clusters <- max(n_clusters, n_folds)  # at least n_folds clusters
   set.seed(seed)
-  block_fold <- sample(rep_len(seq_len(n_folds), length(unique_blocks)))
-  names(block_fold) <- unique_blocks
+  km <- stats::kmeans(centroids, centers = n_clusters, nstart = 10L)
 
-  # Map each observation to its block's fold
-  fold_assignment <- unname(block_fold[block_id])
-  fold_assignment
+  # Attach spatial block labels (must be character for CreateSpacetimeFolds)
+  x_df <- data.frame(spatial_block = as.character(km$cluster),
+                     stringsAsFactors = FALSE)
+
+  # CAST::CreateSpacetimeFolds returns a list with $index (train) and $indexOut (test)
+  folds_cast <- CAST::CreateSpacetimeFolds(
+    x     = x_df,
+    spacevar = "spatial_block",
+    k     = n_folds,
+    seed  = seed
+  )
+
+  # Convert to a plain integer fold vector: each obs gets the fold id where
+  # it appears in indexOut (i.e. as the held-out / test portion)
+  fold_vec <- integer(nrow(panel_sf))
+  for (f in seq_along(folds_cast$indexOut)) {
+    fold_vec[folds_cast$indexOut[[f]]] <- f
+  }
+  # Safety: any unassigned observation joins fold 1
+  fold_vec[fold_vec == 0L] <- 1L
+  fold_vec
 }
 
 #' Prepare model data from a panel sf object
@@ -63,6 +74,28 @@ prepare_model_data <- function(panel_sf, ml_cfg, feature_registry) {
       sprintf("Missing feature columns: %s", paste(missing_features, collapse = ", ")),
       call. = FALSE
     )
+  }
+
+  # Append built-in scalar derived features if present in the panel
+  derived_scalar <- c("log_area", "lon", "lat")
+  for (d in derived_scalar) {
+    if (d %in% names(df) && !d %in% feature_names) {
+      feature_names <- c(feature_names, d)
+    }
+  }
+
+  # Expand 'year' into per-decade dummy columns (year_1850, year_1860, …).
+  # Each column is 1 for observations of that decade and 0 otherwise.
+  # This lets every tree-based engine treat decades as unordered categories
+  # without relying on engine-specific categorical support.
+  if ("year" %in% names(df)) {
+    year_levels     <- sort(unique(as.character(df$year)))
+    year_dummy_names <- paste0("year_", year_levels)
+    for (lvl in year_levels) {
+      col_name    <- paste0("year_", lvl)
+      df[[col_name]] <- as.integer(as.character(df$year) == lvl)
+    }
+    feature_names <- c(feature_names, year_dummy_names)
   }
 
   y <- as.numeric(df[[target_var]])

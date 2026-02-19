@@ -2,8 +2,11 @@ ml:
   target_variable: "population"
   feature_set: "default_v1"
 
+  # Country held out entirely as final test set (excluded from CV training)
+  holdout_test_country: "DEU"
+
   split:
-    method: "spatial_cv"
+    method: "spatial_cv_cast"
     folds: 5
     repeats: 1
     block_size_km: 100

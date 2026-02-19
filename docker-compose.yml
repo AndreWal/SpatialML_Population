@@ -4,8 +4,6 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: spatial-predictions
-    environment:
-      - MOCK_MODE=${MOCK_MODE:-true}
     volumes:
       # Mount raw data so it persists outside the container
       - ./data/raw:/project/data/raw:ro
@@ -24,8 +22,6 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: spatial-predictions-test
-    environment:
-      - MOCK_MODE=true
     command: >
       R -q -e "testthat::test_dir('tests/testthat')"
     profiles:

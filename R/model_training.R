@@ -2,6 +2,19 @@
   if (is.null(x)) y else x
 }
 
+#' Identify 0-based indices of categorical columns for CatBoost
+#'
+#' A column is treated as categorical if it is a factor. Year is now
+#' one-hot encoded into \code{year_XXXX} binary columns and no longer
+#' requires special treatment here.
+#'
+#' @param df data.frame.
+#' @return Integer vector of 0-based column indices; empty if none.
+get_cat_feature_indices <- function(df) {
+  is_cat <- vapply(names(df), function(n) is.factor(df[[n]]), logical(1))
+  which(is_cat) - 1L  # catboost uses 0-based indexing
+}
+
 #' Train a ranger random forest model
 #'
 #' @param train_X Feature data.frame.
@@ -46,9 +59,35 @@ train_xgboost <- function(train_X, train_y, seed = 42L) {
   )
 }
 
+#' Train a CatBoost gradient boosting model
+#'
+#' @param train_X Feature data.frame.
+#' @param train_y Numeric response vector.
+#' @param seed Random seed.
+#' @return A fitted catboost.Model object.
+train_catboost <- function(train_X, train_y, seed = 42L) {
+  cat_idx <- get_cat_feature_indices(train_X)
+  train_pool <- catboost::catboost.load_pool(
+    data         = as.data.frame(train_X),
+    label        = train_y,
+    cat_features = if (length(cat_idx) > 0) cat_idx else NULL
+  )
+  params <- list(
+    loss_function   = "RMSE",
+    eval_metric     = "RMSE",
+    iterations      = 500,
+    depth           = 6,
+    learning_rate   = 0.1,
+    random_seed     = seed,
+    thread_count    = 1L,
+    logging_level   = "Silent"
+  )
+  catboost::catboost.train(train_pool, params = params)
+}
+
 #' Predict from a trained model
 #'
-#' @param model Fitted model object (ranger or xgb.Booster).
+#' @param model Fitted model object (ranger, xgb.Booster, or catboost.Model).
 #' @param new_data Feature data.frame for prediction.
 #' @return Numeric vector of predictions.
 predict_model <- function(model, new_data) {
@@ -59,6 +98,15 @@ predict_model <- function(model, new_data) {
     dmat <- xgboost::xgb.DMatrix(data = as.matrix(new_data))
     return(stats::predict(model, newdata = dmat))
   }
+  if (inherits(model, "catboost.Model")) {
+    df        <- as.data.frame(new_data)
+    cat_idx   <- get_cat_feature_indices(df)
+    pool      <- catboost::catboost.load_pool(
+      data         = df,
+      cat_features = if (length(cat_idx) > 0) cat_idx else NULL
+    )
+    return(catboost::catboost.predict(model, pool))
+  }
   stop(sprintf("Unknown model class: %s", paste(class(model), collapse = ", ")), call. = FALSE)
 }
 
@@ -66,7 +114,7 @@ predict_model <- function(model, new_data) {
 #'
 #' Dispatches to the appropriate training function based on engine name.
 #'
-#' @param engine Character: "ranger" or "xgboost".
+#' @param engine Character: "ranger", "xgboost", or "catboost".
 #' @param train_X Feature data.frame.
 #' @param train_y Numeric response vector.
 #' @param seed Random seed.
@@ -77,6 +125,9 @@ train_model <- function(engine, train_X, train_y, seed = 42L) {
   }
   if (identical(engine, "xgboost")) {
     return(train_xgboost(train_X, train_y, seed = seed))
+  }
+  if (identical(engine, "catboost")) {
+    return(train_catboost(train_X, train_y, seed = seed))
   }
   stop(sprintf("Unsupported model engine: %s", engine), call. = FALSE)
 }
@@ -142,11 +193,13 @@ run_spatial_cv <- function(model_spec, model_data, folds, ml_cfg, seed = 42L) {
   final_model <- train_model(engine, model_data$X, model_data$y, seed = seed)
 
   list(
-    model_id = model_id,
-    engine = engine,
-    fold_results = fold_results,
+    model_id        = model_id,
+    engine          = engine,
+    fold_results    = fold_results,
     overall_metrics = overall_metrics,
-    final_model = final_model,
-    feature_names = model_data$feature_names
+    final_model     = final_model,
+    feature_names   = model_data$feature_names,
+    n_obs           = length(model_data$complete_idx),
+    n_folds         = length(fold_ids)
   )
 }
