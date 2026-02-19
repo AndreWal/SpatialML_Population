@@ -189,7 +189,8 @@ evaluate_holdout <- function(best_cv_result, holdout_panel_sf, ml_cfg,
   metrics <- if (sum(complete) < 1L) {
     list(rmse = NA_real_, mae = NA_real_, rsq = NA_real_)
   } else {
-    preds <- predict_model(best_cv_result$final_model, X[complete, , drop = FALSE])
+    preds <- predict(best_cv_result$final_model,
+                     new_data = X[complete, , drop = FALSE])$.pred
     compute_metrics(y[complete], preds)
   }
 

@@ -1,22 +1,27 @@
 source:
   id: "elevation"
-  provider: "Copernicus DEM GLO-30 (AWS Open Data)"
-  mode: "download"   
-  url: "s3://copernicus-dem-30m/"   
-  version: "GLO-30"
-  license: "Copernicus/ESA terms (see Copernicus DEM user license)"
-  checksum_sha256: null  
+  provider: "WorldClim v2.1 (UC Davis)"
+  # Switch to a higher-resolution URL here if needed; the R code is format-agnostic.
+  url: "https://geodata.ucdavis.edu/climate/worldclim/2_1/base/wc2.1_30s_elev.zip"
+  format: "zip"         # "tif" = direct download | "zip" = download + unzip
+  version: "2.1"
+  license: "CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/)"
+  checksum_sha256: null
+  download_timeout_s: 300   # seconds; increase if on a slow connection
 
 storage:
   raw_path: "data/raw/global/elevation/copernicus_dem_glo30/"
-  processed_path: "data/intermediate/features/elevation_30m.tif"  # or a mosaic you build
+  processed_path: "data/intermediate/features/elevation_10m.tif"
 
 processing:
   input_crs: "EPSG:4326"
   resample_to_canonical_grid: true
-  target_resolution_m: 30        # keep native, or set to your canonical grid (e.g., 1000)
-  nodata_values: [-32767, -9999] # common DEM nodata values; confirm after first tile fetch
+  target_resolution_m: 1000
+  nodata_values: [-32767, -9999]
   zonal_stat: "mean"
+  # Study-area bounding box in WGS84 [xmin, ymin, xmax, ymax].
+  # Covers CHE, DEU, FRA, NLD with a buffer.
+  bbox_wgs84: [-10, 40, 20, 60]
 
 temporal:
   reference_year: null

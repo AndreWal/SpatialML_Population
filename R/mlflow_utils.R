@@ -65,6 +65,13 @@ log_model_run <- function(cv_result, ml_cfg = list(), project_cfg = list(),
     mlflow::mlflow_log_param("block_size_km", ml_cfg$ml$split$block_size_km %||% 100)
     mlflow::mlflow_log_param("seed", project_cfg$project$seed %||% 42)
 
+    # Hyperparameters
+    hp <- cv_result$best_hp %||% list()
+    mlflow::mlflow_log_param("tuned", if (length(hp) > 0) "true" else "false")
+    for (nm in names(hp)) {
+      mlflow::mlflow_log_param(paste0("hp_", nm), hp[[nm]])
+    }
+
     # Metrics
     metrics <- cv_result$overall_metrics
     if (!is.null(metrics$rmse) && !is.na(metrics$rmse)) {

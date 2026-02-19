@@ -13,7 +13,7 @@ source(file.path("R", "raster_predict.R"))
 source(file.path("R", "duckdb_store.R"))
 
 tar_option_set(
-  packages = c("yaml", "sf", "arrow", "terra", "ranger", "xgboost", "catboost", "duckdb", "DBI", "CAST")
+  packages = c("yaml", "sf", "arrow", "terra", "ranger", "xgboost", "lightgbm", "tidymodels", "bonsai", "spatialsample", "doParallel", "duckdb", "DBI")
 )
 
 list(
@@ -24,26 +24,19 @@ list(
       root_dir = "."
     )
   ),
-  tar_target(
-    project_cfg,
-    read_yaml_file(file.path("config", "global", "project.yml"))
-  ),
-  tar_target(
-    paths_cfg,
-    read_yaml_file(file.path("config", "global", "paths.yml"))
-  ),
-  tar_target(
-    crs_cfg,
-    read_yaml_file(file.path("config", "global", "crs.yml"))
-  ),
-  tar_target(
-    qa_cfg,
-    read_yaml_file(file.path("config", "global", "qa.yml"))
-  ),
-  tar_target(
-    ml_cfg,
-    read_yaml_file(file.path("config", "global", "ml.yml"))
-  ),
+  # File-tracking targets: targets hashes the file content so any edit to a
+  # YAML config automatically invalidates the corresponding parsed target.
+  tar_target(project_cfg_file, file.path("config", "global", "project.yml"), format = "file"),
+  tar_target(paths_cfg_file,   file.path("config", "global", "paths.yml"),   format = "file"),
+  tar_target(crs_cfg_file,     file.path("config", "global", "crs.yml"),     format = "file"),
+  tar_target(qa_cfg_file,      file.path("config", "global", "qa.yml"),      format = "file"),
+  tar_target(ml_cfg_file,      file.path("config", "global", "ml.yml"),      format = "file"),
+
+  tar_target(project_cfg, read_yaml_file(project_cfg_file)),
+  tar_target(paths_cfg,   read_yaml_file(paths_cfg_file)),
+  tar_target(crs_cfg,     read_yaml_file(crs_cfg_file)),
+  tar_target(qa_cfg,      read_yaml_file(qa_cfg_file)),
+  tar_target(ml_cfg,      read_yaml_file(ml_cfg_file)),
 
   # ── Feature registry ──────────────────────────────────────────
   tar_target(
@@ -107,15 +100,29 @@ list(
     iteration = "list"
   ),
 
+  # ── Elevation raster download ────────────────────────────────
+  tar_target(
+    elevation_raster_dl,
+    download_elevation_raster(
+      elevation_cfg  = load_source_config("config/sources/elevation.yml"),
+      canonical_crs  = crs_cfg$crs$canonical,
+      root_dir       = "."
+    ),
+    format = "file"
+  ),
+
   # ── Feature extraction (branched per country) ─────────────────
   tar_target(
     country_panel_features,
-    extract_and_join_features(
-      panel_sf = country_panel_validated,
-      feature_registry = feature_registry,
-      canonical_crs = crs_cfg$crs$canonical,
-      root_dir = "."
-    ),
+    {
+      force(elevation_raster_dl)  # ensure DEM is downloaded before extraction
+      extract_and_join_features(
+        panel_sf = country_panel_validated,
+        feature_registry = feature_registry,
+        canonical_crs = crs_cfg$crs$canonical,
+        root_dir = "."
+      )
+    },
     pattern = map(country_panel_validated),
     iteration = "list"
   ),
@@ -183,16 +190,6 @@ list(
     }
   ),
 
-  # ── Spatial CV folds (CAST, training countries only) ─────────
-  tar_target(
-    spatial_folds,
-    create_spatial_folds(
-      panel_sf = train_panel,
-      ml_cfg   = ml_cfg,
-      seed     = project_cfg$project$seed
-    )
-  ),
-
   # ── Prepare model data (training countries only) ──────────────
   tar_target(
     model_data,
@@ -203,34 +200,43 @@ list(
     )
   ),
 
+  # ── Spatial CV resamples (spatialsample, training countries only) ──
+  tar_target(
+    spatial_folds,
+    create_spatial_resamples(
+      panel_sf   = train_panel,
+      model_data = model_data,
+      ml_cfg     = ml_cfg,
+      seed       = project_cfg$project$seed
+    )
+  ),
+
   # ── Model IDs for branching ───────────────────────────────────
   tar_target(
     model_specs,
     {
       specs <- ml_cfg$ml$models
       # Filter to supported engines only
-      supported <- c("ranger", "xgboost", "catboost")
+      supported <- c("ranger", "xgboost", "lightgbm")
       Filter(function(s) s$engine %in% supported, specs)
-    }
+    },
+    iteration = "list"  # enables pattern = map(model_specs) branching below
   ),
 
-  # ── Train + CV per model (branched) ───────────────────────────
+  # ── Train + CV per model (one branch per engine) ───────────────
+  # Each branch is a fully independent targets unit: independently cached,
+  # independently re-run when only that engine's config changes.
   tar_target(
     cv_results,
-    {
-      results <- list()
-      for (spec in model_specs) {
-        res <- run_spatial_cv(
-          model_spec = spec,
-          model_data = model_data,
-          folds      = spatial_folds,
-          ml_cfg     = ml_cfg,
-          seed       = project_cfg$project$seed
-        )
-        results[[length(results) + 1]] <- res
-      }
-      results
-    }
+    run_spatial_cv(
+      model_spec = model_specs,
+      model_data = model_data,
+      resamples  = spatial_folds,
+      ml_cfg     = ml_cfg,
+      seed       = project_cfg$project$seed
+    ),
+    pattern   = map(model_specs),
+    iteration = "list"
   ),
 
   # ── Save CV results ───────────────────────────────────────────

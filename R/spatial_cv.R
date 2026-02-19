@@ -2,49 +2,46 @@
   if (is.null(x)) y else x
 }
 
-#' Create spatial block folds for cross-validation using CAST
+#' Create spatial block CV resamples using spatialsample
 #'
-#' Clusters observations into spatial k-means blocks and then uses
-#' \code{CAST::CreateSpacetimeFolds} to produce balanced,
-#' spatially-aware CV splits.
+#' Partitions space into \code{v} contiguous blocks using
+#' \code{spatialsample::spatial_block_cv}, which provides a stronger
+#' guard against spatial autocorrelation leakage than random k-fold.
+#' Returns an \code{rsample} rset indexed into the plain (no-geometry)
+#' model data.frame — ready for \code{tune::tune_bayes} and
+#' \code{tune::fit_resamples} without any further conversion.
 #'
-#' @param panel_sf sf object with geometries (must have a projected CRS).
-#' @param ml_cfg Parsed ML config list from ml.yml.
-#' @param seed Random seed for fold assignment.
-#' @return Integer vector of fold assignments (same length as nrow(panel_sf)).
-create_spatial_folds <- function(panel_sf, ml_cfg, seed = 42L) {
+#' @param panel_sf sf object for the training countries (projected CRS).
+#' @param model_data List from prepare_model_data.
+#' @param ml_cfg Parsed ML config list.
+#' @param seed Random seed.
+#' @return An rsample manual_rset.
+create_spatial_resamples <- function(panel_sf, model_data, ml_cfg, seed = 42L) {
   n_folds <- ml_cfg$ml$split$folds %||% 5L
 
-  # Get centroids in the projected CRS
-  centroids <- sf::st_coordinates(sf::st_centroid(sf::st_geometry(panel_sf)))
-
-  # K-means spatial clustering: more clusters than folds so CAST can balance them
-  n_clusters <- min(n_folds * 5L, nrow(centroids))
-  n_clusters <- max(n_clusters, n_folds)  # at least n_folds clusters
-  set.seed(seed)
-  km <- stats::kmeans(centroids, centers = n_clusters, nstart = 10L)
-
-  # Attach spatial block labels (must be character for CreateSpacetimeFolds)
-  x_df <- data.frame(spatial_block = as.character(km$cluster),
-                     stringsAsFactors = FALSE)
-
-  # CAST::CreateSpacetimeFolds returns a list with $index (train) and $indexOut (test)
-  folds_cast <- CAST::CreateSpacetimeFolds(
-    x     = x_df,
-    spacevar = "spatial_block",
-    k     = n_folds,
-    seed  = seed
+  # Minimal sf: a row_id column + geometry for the complete-case rows.
+  # row_id lets us map block assignments back to the plain model data.frame.
+  geom_sf <- sf::st_sf(
+    data.frame(row_id = seq_along(model_data$y), check.names = FALSE),
+    geometry = sf::st_geometry(panel_sf)[model_data$complete_idx]
   )
 
-  # Convert to a plain integer fold vector: each obs gets the fold id where
-  # it appears in indexOut (i.e. as the held-out / test portion)
-  fold_vec <- integer(nrow(panel_sf))
-  for (f in seq_along(folds_cast$indexOut)) {
-    fold_vec[folds_cast$indexOut[[f]]] <- f
-  }
-  # Safety: any unassigned observation joins fold 1
-  fold_vec[fold_vec == 0L] <- 1L
-  fold_vec
+  set.seed(seed)
+  sp_cv <- spatialsample::spatial_block_cv(geom_sf, v = n_folds)
+
+  # Plain (no-geometry) data.frame that the workflow will be trained on
+  df <- cbind(
+    data.frame(.outcome = model_data$y, check.names = FALSE),
+    model_data$X
+  )
+
+  # Re-index each split into df (not geom_sf), preserving the spatial blocking
+  splits <- lapply(sp_cv$splits, function(sp) {
+    tr_ids  <- rsample::analysis(sp)$row_id
+    tst_ids <- rsample::assessment(sp)$row_id
+    rsample::make_splits(list(analysis = tr_ids, assessment = tst_ids), data = df)
+  })
+  rsample::manual_rset(splits, sp_cv$id)
 }
 
 #' Prepare model data from a panel sf object
@@ -109,27 +106,5 @@ prepare_model_data <- function(panel_sf, ml_cfg, feature_registry) {
     X = X[complete, , drop = FALSE],
     feature_names = feature_names,
     complete_idx = which(complete)
-  )
-}
-
-#' Split model data by spatial folds
-#'
-#' @param model_data List from prepare_model_data.
-#' @param folds Integer vector of fold assignments.
-#' @param fold_id Which fold to hold out for testing.
-#' @return List with train_X, train_y, test_X, test_y, test_idx.
-split_by_fold <- function(model_data, folds, fold_id) {
-  # folds is for original rows; model_data uses complete_idx subset
-  fold_subset <- folds[model_data$complete_idx]
-
-  is_test <- fold_subset == fold_id
-  is_train <- !is_test
-
-  list(
-    train_X = model_data$X[is_train, , drop = FALSE],
-    train_y = model_data$y[is_train],
-    test_X = model_data$X[is_test, , drop = FALSE],
-    test_y = model_data$y[is_test],
-    test_idx = model_data$complete_idx[is_test]
   )
 }

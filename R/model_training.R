@@ -1,205 +1,173 @@
-`%||%` <- function(x, y) {
-  if (is.null(x)) y else x
-}
+`%||%` <- function(x, y) if (is.null(x)) y else x
 
-#' Identify 0-based indices of categorical columns for CatBoost
+#' Build a parsnip model specification with tune() placeholders
 #'
-#' A column is treated as categorical if it is a factor. Year is now
-#' one-hot encoded into \code{year_XXXX} binary columns and no longer
-#' requires special treatment here.
+#' Returns a parsnip model spec for the given engine with all tunable
+#' hyperparameters marked as \code{tune()}. \pkg{bonsai} must be loaded
+#' (listed in \code{tar_option_set} packages) for the lightgbm engine.
 #'
-#' @param df data.frame.
-#' @return Integer vector of 0-based column indices; empty if none.
-get_cat_feature_indices <- function(df) {
-  is_cat <- vapply(names(df), function(n) is.factor(df[[n]]), logical(1))
-  which(is_cat) - 1L  # catboost uses 0-based indexing
-}
-
-#' Train a ranger random forest model
-#'
-#' @param train_X Feature data.frame.
-#' @param train_y Numeric response vector.
-#' @param seed Random seed.
-#' @return A fitted ranger model object.
-train_ranger <- function(train_X, train_y, seed = 42L) {
-  df <- data.frame(y = train_y, train_X, check.names = FALSE)
-  ranger::ranger(
-    y ~ .,
-    data = df,
-    num.trees = 500,
-    importance = "impurity",
-    seed = seed,
-    num.threads = 1L
-  )
-}
-
-#' Train an xgboost gradient boosting model
-#'
-#' @param train_X Feature data.frame.
-#' @param train_y Numeric response vector.
-#' @param seed Random seed.
-#' @return A fitted xgb.Booster object.
-train_xgboost <- function(train_X, train_y, seed = 42L) {
-  dtrain <- xgboost::xgb.DMatrix(data = as.matrix(train_X), label = train_y)
-  params <- list(
-    objective = "reg:squarederror",
-    eval_metric = "rmse",
-    max_depth = 6,
-    eta = 0.1,
-    subsample = 0.8,
-    colsample_bytree = 0.8,
-    nthread = 1L
-  )
-  set.seed(seed)
-  xgboost::xgb.train(
-    params = params,
-    data = dtrain,
-    nrounds = 200,
-    verbose = 0
-  )
-}
-
-#' Train a CatBoost gradient boosting model
-#'
-#' @param train_X Feature data.frame.
-#' @param train_y Numeric response vector.
-#' @param seed Random seed.
-#' @return A fitted catboost.Model object.
-train_catboost <- function(train_X, train_y, seed = 42L) {
-  cat_idx <- get_cat_feature_indices(train_X)
-  train_pool <- catboost::catboost.load_pool(
-    data         = as.data.frame(train_X),
-    label        = train_y,
-    cat_features = if (length(cat_idx) > 0) cat_idx else NULL
-  )
-  params <- list(
-    loss_function   = "RMSE",
-    eval_metric     = "RMSE",
-    iterations      = 500,
-    depth           = 6,
-    learning_rate   = 0.1,
-    random_seed     = seed,
-    thread_count    = 1L,
-    logging_level   = "Silent"
-  )
-  catboost::catboost.train(train_pool, params = params)
-}
-
-#' Predict from a trained model
-#'
-#' @param model Fitted model object (ranger, xgb.Booster, or catboost.Model).
-#' @param new_data Feature data.frame for prediction.
-#' @return Numeric vector of predictions.
-predict_model <- function(model, new_data) {
-  if (inherits(model, "ranger")) {
-    return(stats::predict(model, data = new_data)$predictions)
-  }
-  if (inherits(model, "xgb.Booster")) {
-    dmat <- xgboost::xgb.DMatrix(data = as.matrix(new_data))
-    return(stats::predict(model, newdata = dmat))
-  }
-  if (inherits(model, "catboost.Model")) {
-    df        <- as.data.frame(new_data)
-    cat_idx   <- get_cat_feature_indices(df)
-    pool      <- catboost::catboost.load_pool(
-      data         = df,
-      cat_features = if (length(cat_idx) > 0) cat_idx else NULL
-    )
-    return(catboost::catboost.predict(model, pool))
-  }
-  stop(sprintf("Unknown model class: %s", paste(class(model), collapse = ", ")), call. = FALSE)
-}
-
-#' Train a model by engine id
-#'
-#' Dispatches to the appropriate training function based on engine name.
-#'
-#' @param engine Character: "ranger", "xgboost", or "catboost".
-#' @param train_X Feature data.frame.
-#' @param train_y Numeric response vector.
-#' @param seed Random seed.
-#' @return Fitted model object.
-train_model <- function(engine, train_X, train_y, seed = 42L) {
-  if (identical(engine, "ranger")) {
-    return(train_ranger(train_X, train_y, seed = seed))
-  }
-  if (identical(engine, "xgboost")) {
-    return(train_xgboost(train_X, train_y, seed = seed))
-  }
-  if (identical(engine, "catboost")) {
-    return(train_catboost(train_X, train_y, seed = seed))
-  }
-  stop(sprintf("Unsupported model engine: %s", engine), call. = FALSE)
-}
-
-#' Run full spatial CV for a single model spec
-#'
-#' Trains per-fold, collects predictions, computes metrics.
-#'
-#' @param model_spec A single entry from ml_cfg$ml$models (list with id, engine).
-#' @param model_data List from prepare_model_data.
-#' @param folds Integer vector of fold assignments.
-#' @param ml_cfg Parsed ML config.
-#' @param seed Project seed.
-#' @return List with model_id, engine, fold_results, overall_metrics, final_model.
-run_spatial_cv <- function(model_spec, model_data, folds, ml_cfg, seed = 42L) {
-  model_id <- model_spec$id %||% model_spec$engine
-  engine <- model_spec$engine
-  n_folds <- length(unique(folds[model_data$complete_idx]))
-
-  fold_results <- list()
-  all_preds <- numeric(length(model_data$y))
-  all_obs <- numeric(length(model_data$y))
-  pred_assigned <- logical(length(model_data$y))
-
-  fold_ids <- sort(unique(folds[model_data$complete_idx]))
-
-  for (fold_id in fold_ids) {
-    split <- split_by_fold(model_data, folds, fold_id)
-
-    # Skip if train or test set is empty
-    if (length(split$train_y) < 2 || length(split$test_y) < 1) {
-      next
-    }
-
-    fit <- train_model(engine, split$train_X, split$train_y, seed = seed + fold_id)
-    preds <- predict_model(fit, split$test_X)
-
-    fold_metrics <- compute_metrics(split$test_y, preds)
-    fold_results[[length(fold_results) + 1]] <- list(
-      fold = fold_id,
-      n_train = length(split$train_y),
-      n_test = length(split$test_y),
-      metrics = fold_metrics,
-      predictions = preds,
-      observed = split$test_y
-    )
-
-    # Map back to complete_idx position
-    test_pos <- match(split$test_idx, model_data$complete_idx)
-    all_preds[test_pos] <- preds
-    all_obs[test_pos] <- split$test_y
-    pred_assigned[test_pos] <- TRUE
-  }
-
-  # Overall metrics from all held-out predictions
-  overall_metrics <- if (sum(pred_assigned) > 0) {
-    compute_metrics(all_obs[pred_assigned], all_preds[pred_assigned])
+#' @param engine Character: "ranger", "xgboost", or "lightgbm".
+#' @param seed Integer random seed forwarded to engine-specific arguments.
+#' @return A parsnip model specification.
+make_parsnip_spec <- function(engine, seed = 42L) {
+  if (engine == "ranger") {
+    parsnip::rand_forest(
+      trees = tune::tune(), mtry = tune::tune(), min_n = tune::tune()
+    ) |>
+      parsnip::set_engine("ranger",
+        importance  = "impurity",
+        num.threads = 1L,
+        seed        = seed
+      ) |>
+      parsnip::set_mode("regression")
+  } else if (engine == "xgboost") {
+    parsnip::boost_tree(
+      trees       = tune::tune(),
+      tree_depth  = tune::tune(),
+      learn_rate  = tune::tune(),
+      sample_size = tune::tune()
+    ) |>
+      parsnip::set_engine("xgboost", nthread = 1L, verbose = 0) |>
+      parsnip::set_mode("regression")
+  } else if (engine == "lightgbm") {
+    parsnip::boost_tree(
+      trees      = tune::tune(),
+      tree_depth = tune::tune(),
+      learn_rate = tune::tune(),
+      mtry       = tune::tune()
+    ) |>
+      parsnip::set_engine("lightgbm",
+        num_threads = 1L,
+        verbose     = -1L,
+        seed        = seed
+      ) |>
+      parsnip::set_mode("regression")
   } else {
-    list(rmse = NA_real_, mae = NA_real_, rsq = NA_real_)
+    stop(sprintf("Unsupported engine: %s", engine), call. = FALSE)
+  }
+}
+
+#' Run spatial cross-validation using tidymodels
+#'
+#' Creates a parsnip workflow for the given engine, optionally tunes
+#' hyperparameters via \code{tune::tune_bayes()}, evaluates the workflow
+#' across all spatial folds, then fits the final model on the full
+#' training set.
+#'
+#' @param model_spec Named list entry from ml_cfg$ml$models.
+#' @param model_data List from prepare_model_data (y, X, feature_names, complete_idx).
+#' @param resamples rsample rset from create_spatial_resamples.
+#' @param ml_cfg Parsed ML config list.
+#' @param seed Random seed.
+#' @return Named list: model_id, engine, fold_results, overall_metrics,
+#'   final_model (fitted \code{workflows::workflow}), best_hp, feature_names,
+#'   n_obs, n_folds.
+run_spatial_cv <- function(model_spec, model_data, resamples, ml_cfg, seed = 42L) {
+  model_id <- model_spec$id %||% model_spec$engine
+  engine   <- model_spec$engine
+
+  # Register a parallel backend for fold and HP-candidate evaluation.
+  # Each engine is configured to use 1 internal thread so that the N_workers
+  # parallel fold processes do not oversubscribe the CPU.
+  n_workers <- max(1L, parallel::detectCores(logical = FALSE) - 1L)
+  doParallel::registerDoParallel(cores = n_workers)
+  on.exit(doParallel::stopImplicitCluster(), add = TRUE)
+
+  # Build parsnip spec and workflow (.outcome ~ . uses all X columns)
+  spec <- make_parsnip_spec(engine, seed = seed)
+  wf   <- workflows::workflow() |>
+    workflows::add_formula(.outcome ~ .) |>
+    workflows::add_model(spec)
+
+  # --- Bayesian hyperparameter tuning via tune::tune_bayes() ---
+  best_hp <- list()
+  if (isTRUE(model_spec$tune)) {
+    init_points <- as.integer(model_spec$tune_init_points %||% 8L)
+    n_iter      <- as.integer(model_spec$tune_iters        %||% 20L)
+
+    # Auto-extract and finalize dials param set (resolves data-dependent ranges)
+    params <- tune::extract_parameter_set_dials(wf) |>
+      dials::finalize(model_data$X)
+
+    set.seed(seed)
+    tune_res <- tune::tune_bayes(
+      object     = wf,
+      resamples  = resamples,
+      param_info = params,
+      initial    = init_points,
+      iter       = n_iter,
+      metrics    = yardstick::metric_set(yardstick::rmse),
+      control    = tune::control_bayes(
+        verbose      = FALSE,
+        no_improve   = 15L,
+        seed         = seed,
+        parallel_over = "everything"  # parallelise across folds AND candidates
+      )
+    )
+
+    best_row <- tune::select_best(tune_res, metric = "rmse")
+    best_hp  <- as.list(best_row[, !grepl("^\\.config", names(best_row)), drop = FALSE])
+    wf       <- tune::finalize_workflow(wf, best_row)
+
+    message(sprintf(
+      "[tune] Best HP for %s via tune_bayes (%d evals): %s",
+      engine, init_points + n_iter,
+      paste(names(best_hp), round(unlist(best_hp), 4), sep = "=", collapse = ", ")
+    ))
   }
 
-  # Train final model on all data
-  final_model <- train_model(engine, model_data$X, model_data$y, seed = seed)
+  # Evaluate final (tuned) workflow across all spatial folds
+  cv_res <- tune::fit_resamples(
+    wf,
+    resamples = resamples,
+    metrics   = yardstick::metric_set(yardstick::rmse, yardstick::mae, yardstick::rsq),
+    control   = tune::control_resamples(save_pred = FALSE, allow_par = TRUE)
+  )
+
+  raw_metrics <- tune::collect_metrics(cv_res, summarize = FALSE)
+  fold_ids    <- sort(unique(raw_metrics$id))
+
+  fold_results <- lapply(seq_along(fold_ids), function(i) {
+    fid <- fold_ids[i]
+    fm  <- raw_metrics[raw_metrics$id == fid, ]
+    get_m <- function(nm) {
+      v <- fm$.estimate[fm$.metric == nm]
+      if (length(v)) v[1] else NA_real_
+    }
+    sp <- resamples$splits[[i]]
+    list(
+      fold    = fid,
+      n_train = nrow(rsample::analysis(sp)),
+      n_test  = nrow(rsample::assessment(sp)),
+      metrics = list(rmse = get_m("rmse"), mae = get_m("mae"), rsq = get_m("rsq"))
+    )
+  })
+
+  agg <- tune::collect_metrics(cv_res, summarize = TRUE)
+  get_agg <- function(nm) {
+    v <- agg$mean[agg$.metric == nm]
+    if (length(v)) v[1] else NA_real_
+  }
+  overall_metrics <- list(
+    rmse = get_agg("rmse"), mae = get_agg("mae"), rsq = get_agg("rsq")
+  )
+
+  # Fit final model on all complete-case data with best (or default) params
+  df <- cbind(
+    data.frame(.outcome = model_data$y, check.names = FALSE),
+    model_data$X
+  )
+  final_fit <- parsnip::fit(wf, data = df)
 
   list(
     model_id        = model_id,
     engine          = engine,
     fold_results    = fold_results,
     overall_metrics = overall_metrics,
-    final_model     = final_model,
+    final_model     = final_fit,
+    best_hp         = best_hp,
     feature_names   = model_data$feature_names,
-    n_obs           = length(model_data$complete_idx),
-    n_folds         = length(fold_ids)
+    n_obs           = nrow(df),
+    n_folds         = length(fold_results)
   )
 }

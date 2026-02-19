@@ -135,7 +135,7 @@ build_feature_stack <- function(grid_template, feature_registry,
 #'
 #' Uses a trained model to predict values for each cell in the feature stack.
 #'
-#' @param model Fitted model object (ranger, xgb.Booster, or catboost.Model).
+#' @param model A fitted \code{workflows::workflow} object.
 #' @param feature_stack Multi-layer SpatRaster from build_feature_stack.
 #' @param feature_names Character vector of feature names (layer names).
 #' @param clamp Logical; clamp predictions to training range.
@@ -145,28 +145,9 @@ predict_to_raster <- function(model, feature_stack, feature_names,
                               clamp = TRUE, train_y = NULL) {
   # terra::predict needs a function wrapper.
   # Subsetting data to feature_names ensures correct column order for all engines.
-  if (inherits(model, "ranger")) {
+  if (inherits(model, "workflow")) {
     pred_fun <- function(model, data, ...) {
-      stats::predict(model, data = data[, feature_names, drop = FALSE])$predictions
-    }
-    pred_raster <- terra::predict(feature_stack, model, fun = pred_fun)
-  } else if (inherits(model, "xgb.Booster")) {
-    pred_fun <- function(model, data, ...) {
-      dmat <- xgboost::xgb.DMatrix(
-        data = as.matrix(data[, feature_names, drop = FALSE])
-      )
-      stats::predict(model, newdata = dmat)
-    }
-    pred_raster <- terra::predict(feature_stack, model, fun = pred_fun)
-  } else if (inherits(model, "catboost.Model")) {
-    pred_fun <- function(model, data, ...) {
-      df      <- as.data.frame(data[, feature_names, drop = FALSE])
-      cat_idx <- get_cat_feature_indices(df)
-      pool    <- catboost::catboost.load_pool(
-        data         = df,
-        cat_features = if (length(cat_idx) > 0) cat_idx else NULL
-      )
-      catboost::catboost.predict(model, pool)
+      predict(model, new_data = data[, feature_names, drop = FALSE])$.pred
     }
     pred_raster <- terra::predict(feature_stack, model, fun = pred_fun)
   } else {

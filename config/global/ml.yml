@@ -18,8 +18,8 @@ ml:
     - id: "xgb"
       engine: "xgboost"
       tune: true
-    - id: "cat"
-      engine: "catboost"
+    - id: "lgbm"
+      engine: "lightgbm"
       tune: true
 
   evaluation:

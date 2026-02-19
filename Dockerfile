@@ -30,21 +30,10 @@ ENV RENV_CONFIG_CACHE_ENABLED=FALSE
 RUN echo 'options(repos = c(CRAN = "https://packagemanager.posit.co/cran/__linux__/noble/latest"), timeout = 300)' \
     >> /usr/local/lib/R/etc/Rprofile.site
 
-# Install CatBoost from the official GitHub Linux binary release.
-# This is done as a separate layer before renv::restore() because:
-#   - catboost is not on CRAN/PPM (no binary mirror available)
-#   - the archive is ~130 MB and benefits from its own retry logic
-#   - once installed here, renv::restore() recognises it and skips reinstall
-ARG CATBOOST_VERSION=1.2.9
-RUN for i in 1 2 3; do \
-        curl -fsSL -o /tmp/catboost.tgz \
-          "https://github.com/catboost/catboost/releases/download/v${CATBOOST_VERSION}/catboost-R-Linux-${CATBOOST_VERSION}.tgz" \
-        && R CMD INSTALL /tmp/catboost.tgz \
-        && rm /tmp/catboost.tgz \
-        && break; \
-        echo "catboost download attempt $i failed, retrying..." >&2; \
-        sleep 15; \
-    done
+# Pre-install LightGBM from PPM binary before renv::restore().
+# LightGBM is on CRAN/PPM, but pre-installing it here follows the same pattern
+# as CatBoost: a heavy native library that benefits from its own cache layer.
+RUN R -q -e "install.packages('lightgbm', repos = 'https://packagemanager.posit.co/cran/__linux__/noble/latest')"
 
 # Restore R packages from lockfile.
 # Retries up to 5 times with back-off to handle transient download errors;

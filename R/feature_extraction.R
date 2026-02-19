@@ -142,9 +142,77 @@ add_geometric_features <- function(panel_sf) {
   panel_sf
 }
 
-#' Extract all enabled features and join to panel
+#' Download and prepare the study-area elevation raster
 #'
-#' Iterates over the feature registry, loads rasters, extracts zonal
+#' All source metadata (URL, format, bounding box, timeout) is read from
+#' \code{elevation_cfg} — nothing is hardcoded here. The function supports
+#' both a direct GeoTIFF download (\code{source.format = "tif"}) and a
+#' zip-wrapped TIF (\code{source.format = "zip"}).
+#' Skips the download entirely if \code{storage.processed_path} already exists.
+#'
+#' @param elevation_cfg Parsed elevation source config list.
+#' @param canonical_crs Canonical CRS string.
+#' @param root_dir Project root directory.
+#' @return Character path to the written (or already existing) raster.
+download_elevation_raster <- function(elevation_cfg,
+                                      canonical_crs = "EPSG:3035",
+                                      root_dir = ".") {
+  processed_path <- file.path(root_dir,
+                              elevation_cfg$storage$processed_path %||% "")
+
+  if (file.exists(processed_path)) {
+    message(sprintf("[elevation] Raster already present: %s", processed_path))
+    return(processed_path)
+  }
+
+  dir.create(dirname(processed_path), recursive = TRUE, showWarnings = FALSE)
+
+  url     <- elevation_cfg$source$url
+  format  <- tolower(elevation_cfg$source$format %||% "tif")
+  timeout <- as.integer(elevation_cfg$source$download_timeout_s %||% 300L)
+  bb      <- as.numeric(unlist(
+    elevation_cfg$processing$bbox_wgs84 %||% c(-10, 40, 20, 60)
+  ))
+
+  if (is.null(url) || !nzchar(url)) {
+    stop("[elevation] source.url is not set in elevation.yml", call. = FALSE)
+  }
+
+  message(sprintf(
+    "[elevation] Downloading elevation raster from %s (bbox: %s) ...",
+    url, paste(bb, collapse = ", ")
+  ))
+
+  prev_timeout <- getOption("timeout")
+  on.exit(options(timeout = prev_timeout), add = TRUE)
+  options(timeout = timeout)
+
+  if (identical(format, "zip")) {
+    tmp_z <- tempfile(fileext = ".zip")
+    tmp_d <- tempfile()
+    utils::download.file(url, destfile = tmp_z, mode = "wb", quiet = FALSE)
+    utils::unzip(tmp_z, exdir = tmp_d)
+    tif_path <- list.files(tmp_d, pattern = "\\.tif$",
+                           full.names = TRUE, recursive = TRUE)[1L]
+    if (is.na(tif_path) || !nzchar(tif_path)) {
+      stop("[elevation] Downloaded zip contained no .tif file", call. = FALSE)
+    }
+  } else {
+    tif_path <- tempfile(fileext = ".tif")
+    utils::download.file(url, destfile = tif_path, mode = "wb", quiet = FALSE)
+  }
+
+  dem      <- terra::rast(tif_path)
+  # terra::ext() order: xmin, xmax, ymin, ymax  (note: bb is xmin, ymin, xmax, ymax)
+  dem_crop <- terra::crop(dem, terra::ext(bb[c(1L, 3L, 2L, 4L)]))
+  dem_proj <- terra::project(dem_crop, canonical_crs)
+
+  terra::writeRaster(dem_proj, processed_path, overwrite = TRUE)
+  message(sprintf("[elevation] Written to: %s", processed_path))
+  processed_path
+}
+
+
 #' statistics, and joins them as columns to the panel sf object.
 #' After raster extraction, geometric features (\code{log_area}) are appended.
 #'
