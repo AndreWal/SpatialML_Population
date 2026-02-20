@@ -1,87 +1,124 @@
 # Data Schema
 
-## Canonical final entity: `country_panel` (sf)
+## Canonical panel entity: `country_panel` (sf)
 
-Produced per country after harmonization + CRS transform + feature extraction.
+Produced per country after assembly, harmonization, CRS transform, QA validation, and feature extraction.
 
 | column | type | required | notes |
 |---|---|---|---|
-| `country_code` | character | yes | ISO3 |
-| `admin_unit_harmonized` | character | yes | harmonized unit id |
-| `admin_name_harmonized` | character | yes | harmonized unit name |
-| `year` | integer | yes | panel year; used as categorical ML feature |
-| `population` | numeric | yes | weighted/summed by crosswalk mapping |
-| `elevation_mean` | numeric | no | mean elevation (m), from raster zonal extraction |
-| `log_area` | numeric | yes | log1p of polygon area in m² (canonical CRS); derived via `sf::st_area()` |
-| `lon` | numeric | yes | WGS84 longitude of polygon centroid (degrees) |
-| `lat` | numeric | yes | WGS84 latitude of polygon centroid (degrees) |
-| `<feature_id>` | numeric | no | additional features per `config/sources/features.yml` |
-| `geometry` | geometry | yes | canonical CRS |
+| `country_code` | character | yes | ISO3 code from country config |
+| `admin_unit_harmonized` | character | yes | canonical admin unit ID |
+| `admin_name_harmonized` | character | yes | canonical admin unit name |
+| `year` | integer | yes | panel year/decade |
+| `population` | numeric | yes | weighted/summed during harmonization |
+| `elevation_mean` | numeric | yes (current config) | enabled raster feature from `config/sources/features.yml` |
+| `log_area` | numeric | yes | `log1p` polygon area in m^2 (canonical CRS) |
+| `lon` | numeric | yes | centroid longitude in EPSG:4326 |
+| `lat` | numeric | yes | centroid latitude in EPSG:4326 |
+| `geometry` | geometry | yes | geometry in canonical CRS (default EPSG:3035) |
+
+Notes:
+- Additional feature columns appear when enabled in `config/sources/features.yml`.
+- Current default feature registry enables `elevation_mean` only.
 
 Primary key:
 - `country_code + admin_unit_harmonized + year`
 
-## ML outputs
+## Global panel outputs
 
-### `models/model_summary.csv` — **primary model comparison file**
-Long-format table: one row per model per evaluation split. The `eval_set` column
-makes the data provenance unambiguous.
+Combined panel is written to:
+- `data/final/global_panel.gpkg`
+- `data/final/global_panel.parquet`
+
+Schema matches country panel columns (without geometry in parquet).
+
+## Model matrix schema (internal)
+
+`prepare_model_data()` creates the training matrix from panel columns:
+- Base features: enabled registry features (currently `elevation_mean`)
+- Derived scalar features (auto-appended when available): `log_area`, `lon`, `lat`
+- Time encoding: one-hot year dummy columns derived from observed years, e.g. `year_1850`, `year_1860`, ..., `year_2020`
+
+Target:
+- `population` (default from `config/global/ml.yml::ml.target_variable`)
+
+Complete-case filtering is applied to target + all selected feature columns.
+
+## ML output files
+
+### `models/model_summary.csv` (primary comparison table)
+One row per model/evaluation split.
 
 | column | type | notes |
 |---|---|---|
-| `model_id` | character | e.g. "rf", "xgb", "cat" |
-| `engine` | character | e.g. "ranger", "xgboost", "catboost" |
-| `eval_set` | character | `"spatial_cv"` = held-out CV folds on training countries; `"test_holdout"` = never-seen holdout country |
-| `countries` | character | countries contributing observations to this evaluation (e.g. "NLD" for CV, "DEU" for test) |
-| `n_folds` | integer | number of spatial CV folds; `NA` for test_holdout |
-| `n_obs` | integer | total observations evaluated |
-| `rmse` | numeric | RMSE for this eval_set |
-| `mae` | numeric | MAE for this eval_set |
-| `rsq` | numeric | R² for this eval_set |
+| `model_id` | character | configured model ID (e.g. `rf`, `xgb`, `lgbm`) |
+| `engine` | character | model engine (`ranger`, `xgboost`, `lightgbm`) |
+| `eval_set` | character | `spatial_cv` or `test_holdout` |
+| `countries` | character | training-country set (for CV) or holdout country ISO3 |
+| `n_folds` | integer | number of CV folds (`NA` for holdout row) |
+| `n_obs` | integer | evaluated observations |
+| `rmse` | numeric | RMSE |
+| `mae` | numeric | MAE |
+| `rsq` | numeric | R^2 |
 
-### `models/cv_summary.csv` — spatial CV metrics only
+### `models/cv_summary.csv`
+One row per configured model with CV-only summary metrics.
+
 | column | type | notes |
 |---|---|---|
 | `model_id` | character | |
 | `engine` | character | |
-| `eval_set` | character | always `"spatial_cv"` |
+| `eval_set` | character | always `spatial_cv` |
 | `n_cv_folds` | integer | number of CV folds |
-| `n_cv_obs` | integer | training observations used |
-| `train_countries` | character | `+`-joined ISO3 codes |
-| `cv_rmse` | numeric | mean RMSE across held-out folds |
-| `cv_mae` | numeric | mean MAE across held-out folds |
-| `cv_rsq` | numeric | mean R² across held-out folds |
+| `n_cv_obs` | integer | observations used for CV |
+| `train_countries` | character | `+`-joined ISO3 set |
+| `cv_rmse` | numeric | mean RMSE across folds |
+| `cv_mae` | numeric | mean MAE across folds |
+| `cv_rsq` | numeric | mean R^2 across folds |
 
-### `models/<model_id>_folds.csv` — per-fold detail
+### `models/<model_id>_folds.csv`
+Per-fold CV diagnostics.
+
 | column | type | notes |
 |---|---|---|
 | `model_id` | character | |
-| `split_type` | character | always `"spatial_cv_validation"` |
-| `fold` | integer | fold number |
-| `n_train` | integer | training set size for this fold |
-| `n_test` | integer | validation set size for this fold |
-| `fold_rmse` | numeric | RMSE on the held-out fold |
-| `fold_mae` | numeric | MAE on the held-out fold |
-| `fold_rsq` | numeric | R² on the held-out fold |
+| `split_type` | character | always `spatial_cv_validation` |
+| `fold` | character | fold identifier from rsample/spatialsample |
+| `n_train` | integer | training rows in fold |
+| `n_test` | integer | assessment rows in fold |
+| `fold_rmse` | numeric | fold RMSE |
+| `fold_mae` | numeric | fold MAE |
+| `fold_rsq` | numeric | fold R^2 |
 
-### Final models (`models/<model_id>_final.rds`)
-Serialized R model objects trained on **all non-holdout data**.
+### Final model objects
+- `models/<model_id>_final.rds`
+- Contains fitted `parsnip`/`workflow` model trained on all non-holdout rows.
 
-### Prediction rasters (`data/final/predictions/global_<decade>_prediction_<model_id>.tif`)
-One GeoTIFF per decade (e.g. `global_1850_prediction_rf.tif` … `global_2020_prediction_rf.tif`).
-Decade = `floor(year / 10) * 10`. Each raster covers all enabled countries at the
-configured resolution (default 1000 m) in canonical CRS. The constant `year`,
-`lat`, `lon`, and `log_area` feature layers are baked into every raster before
-prediction.
+## Prediction raster outputs
 
-## DuckDB intermediate store (`cache/panels.duckdb`)
-Tables: `panel_<iso3>` (per country), `panel_all` (combined).
-Contains tabular columns only (no geometry).
+Path pattern:
+- `data/final/predictions/global_<year>_prediction_<model_id>.tif`
+
+Semantics:
+- One raster per unique year/decade in `combined_panel$year`.
+- Raster feature stack includes enabled raster features plus constant layers for `log_area`, `lon`, `lat`, and year dummy layers matching the trained model feature names.
+- Output CRS is canonical CRS.
+
+## DuckDB intermediate store
+
+Database path:
+- `cache/panels.duckdb`
+
+Tables:
+- `panel_<iso3>` (lowercase country code)
+- `panel_all`
+
+All DuckDB tables are tabular (no geometry column).
 
 ## Input contracts
 
-### Tabular input (`inputs.tabular[]`)
-Required fields in each config entry:
+### Tabular inputs (`inputs.tabular[]`)
+Required per input config:
 - `id`, `path`, `format`, `columns`
 
 Required column mappings:
@@ -90,35 +127,43 @@ Required column mappings:
 Supported formats:
 - `csv`, `parquet`, `xlsx`
 
-### Geometry input (`inputs.geometry[]`)
-Required fields in each config entry:
+### Geometry inputs (`inputs.geometry[]`)
+Required per input config:
 - `id`, `path`, `format`, `columns`
 
 Required column mappings:
 - `admin_id_raw`, `admin_name`
 
+Optional year handling:
+- direct `year` column in geometry file, or
+- a single value in `valid_years` / `years` / `year_filter`
+
 Supported formats:
 - `shp`/`shapefile`, `gpkg`, `geojson`
 
 ## Assembly strategies
-Applies to `tabular_recipe.strategy` and `geometry_recipe.strategy`:
-- `single`: use exactly one input
-- `by_year`: use `year_map` to pick input per year
-- `stack_then_resolve`: stack inputs and resolve duplicates by first input priority
+Applies to tabular and geometry recipes:
+- `single`: exactly one selected input
+- `by_year`: per-year mapping using `year_map`
+- `stack_then_resolve`: stack selected inputs and keep first per key by input priority
 
 ## Crosswalk contract
-Expected columns in `config/crosswalks/<ISO3>.csv`:
+Expected file path pattern:
+- `config/crosswalks/<ISO3>.csv`
+
+Required columns:
 - `from_admin_id`, `to_admin_id`, `to_admin_name`
 
 Optional columns:
 - `weight` (default `1`)
 - `valid_from_year`, `valid_to_year`
 
-Unmatched behavior controlled by `harmonization.unmatched_policy`:
-- `fail`, `warn`, `drop`
+Unmatched behavior:
+- Controlled by `harmonization.unmatched_policy`: `fail`, `warn`, or `drop`
 
 ## QA checks
 - Unique key constraint
-- Non-empty geometry
-- CRS equals canonical CRS
-- Join coverage >= configured threshold
+- Non-empty geometry (empty rows dropped with warning)
+- Geometry validity (with optional auto-fix)
+- Final CRS equals canonical CRS
+- Join coverage above configured threshold

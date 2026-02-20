@@ -1,120 +1,68 @@
 # Feature Sources
 
 ## Purpose
-This file is the canonical registry of all engineered features used in the pipeline.
+Canonical registry of engineered predictors used by the pipeline.
 
-It documents:
-- what each feature means
-- where data comes from
-- how it is acquired (local vs download)
-- licensing and provenance
-- spatial/temporal processing
-- missing-data handling
-
-If any feature is added/removed/changed, update:
-1. this file
+When feature behavior changes, update:
+1. `docs/FEATURE_SOURCES.md`
 2. `config/sources/features.yml`
-3. the feature-specific config in `config/sources/*.yml`
+3. The referenced source config file(s) in `config/sources/*.yml`
 
----
+## Global feature rules
+1. `feature_id` values must be unique.
+2. Each enabled feature must reference a valid `source_config` file.
+3. Extraction method and transformation must be explicit.
+4. Missing-value policy must be explicit.
+5. Source licensing/provenance must be documented.
 
-## 1) Global feature engineering rules
+## Active feature registry (current code + config)
 
-1. Every feature must have a unique `feature_id`.
-2. Every feature must map to exactly one source config file.
-3. External downloads must include version + checksum + license.
-4. Spatial extraction method must be explicit (e.g., zonal mean).
-5. Temporal alignment rule must be explicit (e.g., nearest year).
-6. Missing-value policy must be explicit.
-7. Any transformation/scaling must be documented.
+This table mirrors `config/sources/features.yml` as currently configured.
 
----
-
-## 2) Feature registry (authoritative index)
-
-| feature_id             | source_id      | source_config                         | spatial_input | temporal_ref | extraction      | transform | missing_policy | enabled |
-|------------------------|----------------|---------------------------------------|---------------|--------------|-----------------|-----------|----------------|---------|
-| elevation_mean         | elevation      | config/sources/elevation.yml          | raster        | static       | zonal_mean      | none      | keep_na        | true    |
-| slope_mean             | elevation      | config/sources/elevation.yml          | raster        | static       | zonal_mean      | none      | keep_na        | true    |
-| climate_temp_mean      | climate        | config/sources/climate.yml            | raster        | annual       | zonal_mean      | none      | impute_country | true    |
-| nightlights_mean       | nightlights    | config/sources/nightlights.yml        | raster        | annual       | zonal_mean      | log1p     | keep_na        | true    |
-| travel_time_city_mean  | accessibility  | config/sources/accessibility.yml      | raster        | static       | zonal_mean      | none      | keep_na        | true    |
+| feature_id | enabled | type | source_id | source_config | extraction | transform | missing_policy |
+|---|---|---|---|---|---|---|---|
+| `elevation_mean` | true | `raster_zonal` | `elevation` | `config/sources/elevation.yml` | zonal mean (`processing.zonal_stat`) | none | keep NA |
 
 Notes:
-- This table must mirror `config/sources/features.yml`.
-- `enabled=false` features are ignored in production runs.
+- Current production runs only include `elevation_mean` from the registry.
+- Derived geometric predictors `log_area`, `lon`, and `lat` are added in code (`add_geometric_features()`) and are not configured in `features.yml`.
+- Year is encoded during model prep as dummy features `year_<value>`; these are generated from panel data, not from source configs.
 
----
+## Source record: `elevation_mean`
 
-## 3) Per-feature source records
+- Description: Mean elevation within each harmonized admin unit geometry.
+- Model role: predictor.
+- Source dataset: WorldClim v2.1 elevation raster.
+- Provider: UC Davis (as declared in source config).
+- Acquisition mode: download (zip archive), then unzip and process.
+- Source config file: `config/sources/elevation.yml`.
+- Source URL: `https://geodata.ucdavis.edu/climate/worldclim/2_1/base/wc2.1_30s_elev.zip`
+- Source format: `zip` (contains `.tif`).
+- Source version: `2.1`.
+- License: `CC BY 4.0`.
+- Raw storage path: `data/raw/global/elevation/copernicus_dem_glo30/` (config path; loader can also read from processed path).
+- Processed raster path: `data/intermediate/features/elevation_10m.tif`.
+- Spatial processing:
+  - Input CRS expected in source config: `EPSG:4326`
+  - Cropped to configured study bbox: `[-10, 40, 20, 60]` (WGS84)
+  - Reprojected to canonical CRS (`config/global/crs.yml`, default `EPSG:3035`)
+  - Extraction method: polygon zonal mean (`terra::extract(..., fun = mean, exact = TRUE)`)
+- Temporal characteristics: static (applies to all years).
+- Missing-data handling: `NA` values are retained.
+- Quality checks:
+  - Source config must exist and be readable.
+  - Raster must be discoverable from processed path or raw path.
+  - Raster is reprojected if CRS differs from canonical CRS.
 
-Use this template for each feature/source block.
+## Planned but currently disabled features
 
-## Feature: `<feature_id>`
+Present as commented examples in `config/sources/features.yml` (not active in pipeline unless enabled):
+- `slope_mean` via `config/sources/elevation.yml`
+- `climate_temp_mean` via `config/sources/climate.yml`
+- `nightlights_mean` via `config/sources/nightlights.yml`
+- `travel_time_city_mean` via `config/sources/accessibility.yml`
 
-- **Description:**  
-- **Unit:**  
-- **Model role:** predictor / target-adjacent / diagnostic
-- **Source dataset name:**  
-- **Provider:**  
-- **Acquisition mode:** `download` or `local`
-- **Source config file:** `config/sources/<name>.yml`
-- **Version/date:**  
-- **License:**  
-- **Citation requirement:** yes/no (if yes, include citation text below)
-- **Checksum (if downloaded):** SHA256
-- **Raw file path:**  
-- **Processed file path:**  
-- **Spatial characteristics:** resolution, CRS, extent
-- **Temporal characteristics:** reference year/period, update cadence
-- **Extraction rule:** zonal statistic / distance / overlay logic
-- **Transformations:** e.g., `log1p`, standardization, clipping
-- **Missing-data rule:** drop / keep / impute (with method)
-- **Quality checks:** valid range, outlier bounds, coverage minimum
-- **Known caveats:**  
+These do not currently contribute columns to model training/output schemas.
 
----
-
-## 4) Filled examples
-
-## Feature: `elevation_mean`
-- **Description:** Mean elevation within harmonized admin polygon.
-- **Unit:** meters above sea level.
-- **Source dataset name:** Global DEM (document exact product in source config).
-- **Provider:** documented in `config/sources/elevation.yml`.
-- **Acquisition mode:** download/local (as configured).
-- **Source config file:** `config/sources/elevation.yml`
-- **Temporal characteristics:** static.
-- **Extraction rule:** zonal mean over admin polygons in canonical CRS.
-- **Transformations:** none.
-- **Missing-data rule:** keep NA (no synthetic fill by default).
-- **Quality checks:** values in plausible global range for DEM product.
-
----
-
-## 5) Temporal alignment policy
-When panel year and feature year differ:
-1. exact year match if available
-2. nearest prior year within tolerance
-3. nearest year (absolute distance) if configured
-4. otherwise NA
-
-All alignment behavior must be encoded in source config and reproducible.
-
----
-
-## 6) Licensing and redistribution policy
-For each external dataset, include:
-- license type
-- attribution requirement
-- redistribution restrictions
-- whether derived outputs can be shared publicly
-
-If redistribution is restricted:
-- do not commit raw source files
-- document download instructions and checksum only
-
----
-
-## 7) Change log
-- `YYYY-MM-DD`: Added/removed/updated feature(s), reason, author.
+## Change log
+- `2026-02-20`: Replaced template content with code-accurate registry and source details; aligned enabled features to current `features.yml`.
