@@ -4,11 +4,31 @@ features_registry:
     source_config: "config/sources/elevation.yml"
     enabled: true
 
+  - id: "slope_mean"
+    type: "raster_zonal"
+    source_config: "config/sources/terrain.yml"
+    processed_path: "data/intermediate/features/slope_30s.tif"
+    enabled: true
+
+  - id: "tri_mean"
+    type: "raster_zonal"
+    source_config: "config/sources/terrain.yml"
+    processed_path: "data/intermediate/features/tri_30s.tif"
+    enabled: true
+
+  - id: "dist_coast_km"
+    type: "raster_zonal"
+    source_config: "config/sources/water_distance.yml"
+    processed_path: "data/intermediate/features/dist_coast_km.tif"
+    enabled: true
+
+  - id: "dist_river_km"
+    type: "raster_zonal"
+    source_config: "config/sources/water_distance.yml"
+    processed_path: "data/intermediate/features/dist_river_km.tif"
+    enabled: true
+
   # Future features (enable when source configs are created):
-  # - id: "slope_mean"
-  #   type: "raster_zonal"
-  #   source_config: "config/sources/elevation.yml"
-  #   enabled: false
   # - id: "climate_temp_mean"
   #   type: "raster_zonal"
   #   source_config: "config/sources/climate.yml"

@@ -81,6 +81,14 @@ prepare_model_data <- function(panel_sf, ml_cfg, feature_registry) {
     }
   }
 
+  # Append soil PCA components if present (from soil PCA step)
+  soil_pc_cols <- sort(grep("^soil_pc\\d+$", names(df), value = TRUE))
+  for (d in soil_pc_cols) {
+    if (!d %in% feature_names) {
+      feature_names <- c(feature_names, d)
+    }
+  }
+
   # Expand 'year' into per-decade dummy columns (year_1850, year_1860, …).
   # Each column is 1 for observations of that decade and 0 otherwise.
   # This lets every tree-based engine treat decades as unordered categories

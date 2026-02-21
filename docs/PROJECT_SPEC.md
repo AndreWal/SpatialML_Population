@@ -22,6 +22,7 @@ The pipeline is orchestrated by `targets` in `_targets.R` and sources functions 
 - `R/model_evaluation.R`
 - `R/mlflow_utils.R`
 - `R/raster_predict.R`
+- `R/soilgrids.R`
 - `R/duckdb_store.R`
 
 ## Runtime behavior
@@ -41,6 +42,7 @@ For each enabled country branch:
 7. Extract enabled raster features and append derived geometric features:
    - `log_area` (`log1p(st_area)` in canonical CRS)
    - `lon`, `lat` (centroid coordinates in WGS84)
+   - SoilGrids zonal means (61 raw layers; PCA-reduced after panel combination)
 8. Write country outputs:
    - `data/final/<ISO3>/<ISO3>_panel.gpkg`
    - `data/final/<ISO3>/<ISO3>_panel.parquet`
@@ -48,7 +50,8 @@ For each enabled country branch:
 ## Cross-country ML contract
 After country ETL:
 1. Combine all country panels to one global sf panel.
-2. Persist global outputs:
+2. Fit PCA on raw soil feature columns (`soil_*`), transform panel to replace `soil_*` with `soil_pc*` components (variance threshold configurable, default 95%).
+3. Persist global outputs:
    - `data/final/global_panel.gpkg`
    - `data/final/global_panel.parquet`
 3. Split into training vs holdout country (`config/global/ml.yml::ml.holdout_test_country`, default `DEU`).

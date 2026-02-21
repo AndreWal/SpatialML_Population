@@ -1,0 +1,71 @@
+source:
+  id: "soilgrids"
+  provider: "ISRIC - World Soil Information"
+  url: "https://files.isric.org/soilgrids/latest/data/"
+  version: "2.0"
+  license: "CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/)"
+  reference: "Poggio et al. (2021) SOIL 7:217-240. DOI:10.5194/soil-7-217-2021"
+  download_timeout_s: 600
+
+storage:
+  processed_dir: "data/intermediate/features/soilgrids"
+
+processing:
+  input_crs: "EPSG:4326"
+  # Study-area bounding box in WGS84 [xmin, ymin, xmax, ymax].
+  # Same extent as the elevation source; covers DEU, NLD, FRA, CHE with buffer.
+  bbox_wgs84: [-10, 40, 20, 60]
+  stat: "mean"
+
+# ── Soil properties ──────────────────────────────────────────────
+# Physical:
+#   bdod      Bulk density of the fine earth fraction      (cg/cm³)
+#   cfvo      Coarse fragments volumetric                  (cm³/dm³)
+#   clay      Clay content                                 (g/kg)
+#   sand      Sand content                                 (g/kg)
+#   silt      Silt content                                 (g/kg)
+#
+# Chemical:
+#   cec       Cation exchange capacity                     (mmol(c)/kg)
+#   nitrogen  Total nitrogen                               (cg/kg)
+#   phh2o     Soil pH in H₂O                              (pH × 10)
+#   soc       Soil organic carbon content                  (dg/kg)
+#   ocd       Organic carbon density                       (hg/m³)
+#   ocs       Organic carbon stocks (0-30 cm only)         (t/ha)
+#
+# Depths:
+#   Standard: 0-5 cm, 5-15 cm, 15-30 cm, 30-60 cm, 60-100 cm, 100-200 cm
+#   ocs only: 0-30 cm
+
+properties:
+  physical:
+    - bdod
+    - cfvo
+    - clay
+    - sand
+    - silt
+  chemical:
+    - cec
+    - nitrogen
+    - phh2o
+    - soc
+    - ocd
+    - ocs
+
+depths:
+  standard:
+    - "0-5cm"
+    - "5-15cm"
+    - "15-30cm"
+    - "30-60cm"
+    - "60-100cm"
+    - "100-200cm"
+  ocs_only: "0-30cm"
+
+pca:
+  variance_threshold: 0.95
+  prefix: "soil_pc"
+
+temporal:
+  reference_year: null
+  apply_to_years: "all"

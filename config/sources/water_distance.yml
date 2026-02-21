@@ -1,0 +1,37 @@
+source:
+  id: "water_distance"
+  provider: "HydroSHEDS (WWF) + Natural Earth"
+  # HydroRIVERS v1.0 – global river network at 15 arc-second resolution,
+  # derived from HydroSHEDS DEM. Distributed by WWF.
+  hydrorivers_url: "https://data.hydrosheds.org/file/HydroRIVERS/HydroRIVERS_v10_eu_shp.zip"
+  # Natural Earth 10m coastline (public domain).
+  coastline_url: "https://naciscdn.org/naturalearth/10m/physical/ne_10m_coastline.zip"
+  version: "1.0"
+  license: "HydroRIVERS: HydroSHEDS license (free for non-commercial); Coastline: public domain"
+  reference: "Lehner, B., Grill G. (2013): Global river hydrography and network routing: baseline data and new approaches to study the world's large river systems. Hydrological Processes, 27(15): 2171–2186. DOI: 10.1002/hyp.9740"
+  download_timeout_s: 600
+
+storage:
+  hydrorivers_raw_dir: "data/intermediate/downloads/hydrorivers"
+  coastline_raw_dir:   "data/intermediate/downloads/coastline"
+  dist_coast_path:     "data/intermediate/features/dist_coast_km.tif"
+  dist_river_path:     "data/intermediate/features/dist_river_km.tif"
+
+processing:
+  # Study-area bounding box in WGS84 [xmin, ymin, xmax, ymax].
+  # Same extent as elevation and soilgrids sources.
+  bbox_wgs84: [-10, 40, 20, 60]
+  # Minimum Strahler stream order for "major river" classification.
+  # Order 4 ≈ medium-to-large rivers; increase to 5-6 for only large rivers.
+  strahler_min_order: 4
+  # Slope penalty weight for least-cost path analysis.
+  # Controls how much steeper terrain inflates effective distance.
+  # cost_per_cell = cell_res_m * (1 + slope_penalty * slope_deg / 90)
+  # A penalty of 5 means a 45° slope costs 3.5× as much as flat terrain;
+  # set to 0 for pure Euclidean distance behaviour.
+  slope_penalty: 5
+  zonal_stat: "mean"
+
+temporal:
+  reference_year: null
+  apply_to_years: "all"

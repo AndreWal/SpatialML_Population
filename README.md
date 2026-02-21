@@ -13,12 +13,12 @@ A reproducible pipeline for estimating historical sub-national population across
 2. Resolves admin boundary changes through crosswalk tables (`config/crosswalks/<ISO3>.csv`).
 3. Reprojects everything to the canonical equal-area CRS (EPSG:3035).
 4. Validates geometry and QA rules (unique keys, join coverage, CRS).
-5. Extracts raster features per admin polygon (elevation zonal mean, plus derived geometric features).
+5. Extracts configured raster features per admin polygon (elevation, terrain, water-distance, and SoilGrids-derived features), plus derived geometric features.
 6. Writes harmonized outputs to `data/final/<ISO3>/`.
 
 **🤖 Machine learning.** Once all country panels are assembled:
-- Spatial block CV is created with `CAST::CreateSpacetimeFolds` (k-means clustering, 5-fold by default) on training countries (currently NLD).
-- Three model engines are trained and evaluated: `ranger`, `xgboost`, `catboost`.
+- Spatial block CV is created with `spatialsample::spatial_block_cv` (5-fold by default) on the training countries.
+- Three model engines are trained and evaluated: `ranger`, `xgboost`, `lightgbm`.
 - The best model by CV RMSE is selected and evaluated on a spatial holdout set (DEU).
 - Metrics are saved to `models/model_summary.csv` with an `eval_set` column that distinguishes `spatial_cv` from `test_holdout` rows.
 
@@ -31,6 +31,9 @@ A reproducible pipeline for estimating historical sub-national population across
 | Feature | Source | Notes |
 |---|---|---|
 | `elevation_mean` | ⛰️ DEM raster, zonal mean per polygon | configured in `config/sources/elevation.yml` |
+| `slope_mean`, `tri_mean` | 🏔️ Terrain derivatives from DEM | configured in `config/sources/terrain.yml` |
+| `dist_coast_km`, `dist_river_km` | 🌊 Terrain-weighted least-cost distance to water | configured in `config/sources/water_distance.yml` |
+| `soil_pc1` … `soil_pcN` | 🌱 PCA components from SoilGrids zonal means | configured in `config/sources/soilgrids.yml` |
 | `log_area` | 📐 `sf::st_area()` → log1p | computed in EPSG:3035 (equal-area) |
 | `lon`, `lat` | 📍 WGS84 centroid coordinates | reprojected to EPSG:4326 for extraction |
 | `year_1850` … `year_2020` | 📅 Binary one-hot decade dummies | one column per decade present in the panel |
@@ -46,7 +49,8 @@ A reproducible pipeline for estimating historical sub-national population across
 | `data/final/global_panel.gpkg` / `.parquet` | All countries combined |
 | `data/final/predictions/global_<year>_prediction_<model>.tif` | Decade population raster |
 | `models/model_summary.csv` | CV + holdout metrics in one table |
-| `models/cv_summary.csv` | Per-fold CV results |
+| `models/cv_summary.csv` | CV summary metrics per model |
+| `models/<model_id>_folds.csv` | Per-fold CV diagnostics |
 
 ---
 
@@ -106,7 +110,7 @@ R -q -e "testthat::test_dir('tests/testthat')"
 
 ## 🔁 Reproducibility
 
-- **Packages**: `renv.lock` pins all R package versions including catboost (GitHub install).
+- **Packages**: `renv.lock` pins all R package versions.
 - **Environment**: `Dockerfile` + `docker-compose.yml` (`rocker/geospatial:4.5.2`).
 - **Pipeline**: `targets` with dynamic branching per country; stale targets are detected and rebuilt automatically.
 - **Seed**: set in `config/global/project.yml::project.seed` and forwarded to all random operations.
@@ -117,7 +121,7 @@ R -q -e "testthat::test_dir('tests/testthat')"
 ## 📁 Repository layout
 
 ```
-_targets.R              # Pipeline definition (all 44+ targets)
+_targets.R              # Pipeline definition (all targets)
 R/                      # Pure functions: IO, ETL, features, models, evaluation
 config/                 # All configuration (no hardcoded paths in code)
 data/raw/               # Source data — not committed, mounted at runtime

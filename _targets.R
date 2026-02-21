@@ -10,6 +10,9 @@ source(file.path("R", "model_training.R"))
 source(file.path("R", "model_evaluation.R"))
 source(file.path("R", "mlflow_utils.R"))
 source(file.path("R", "raster_predict.R"))
+source(file.path("R", "soilgrids.R"))
+source(file.path("R", "terrain_features.R"))
+source(file.path("R", "water_distance.R"))
 source(file.path("R", "duckdb_store.R"))
 
 tar_option_set(
@@ -111,11 +114,52 @@ list(
     format = "file"
   ),
 
+  # ── SoilGrids raster download ────────────────────────────────
+  tar_target(
+    soilgrids_dl,
+    download_soilgrids_rasters(
+      soilgrids_cfg = load_source_config("config/sources/soilgrids.yml"),
+      canonical_crs = crs_cfg$crs$canonical,
+      root_dir      = "."
+    ),
+    format = "file"
+  ),
+
+  # ── Terrain rasters (slope + TRI from DEM) ───────────────────
+  tar_target(
+    terrain_rasters,
+    compute_terrain_rasters(
+      dem_path      = elevation_raster_dl,
+      terrain_cfg   = load_source_config("config/sources/terrain.yml"),
+      canonical_crs = crs_cfg$crs$canonical,
+      root_dir      = "."
+    ),
+    format = "file"
+  ),
+
+  # ── Water distance rasters (coast + major rivers) ────────────
+  # Uses slope raster from terrain step as friction surface for
+  # least-cost path analysis (costDist).
+  tar_target(
+    water_distance_rasters,
+    compute_water_distance_rasters(
+      water_cfg     = load_source_config("config/sources/water_distance.yml"),
+      dem_path      = elevation_raster_dl,
+      slope_path    = terrain_rasters[1],   # first element is slope raster
+      canonical_crs = crs_cfg$crs$canonical,
+      root_dir      = "."
+    ),
+    format = "file"
+  ),
+
   # ── Feature extraction (branched per country) ─────────────────
   tar_target(
     country_panel_features,
     {
-      force(elevation_raster_dl)  # ensure DEM is downloaded before extraction
+      force(elevation_raster_dl)      # ensure DEM is downloaded before extraction
+      force(soilgrids_dl)             # ensure soil rasters are downloaded
+      force(terrain_rasters)          # ensure slope + TRI rasters are computed
+      force(water_distance_rasters)   # ensure distance rasters are computed
       extract_and_join_features(
         panel_sf = country_panel_validated,
         feature_registry = feature_registry,
@@ -142,8 +186,24 @@ list(
 
   # ── Combine panels for ML ─────────────────────────────────────
   tar_target(
-    combined_panel,
+    combined_panel_raw,
     do.call(rbind, country_panel_features)
+  ),
+
+  # ── Soil PCA: fit on combined panel and transform ────────────
+  tar_target(
+    soil_pca_model,
+    fit_soil_pca(
+      panel_sf           = combined_panel_raw,
+      variance_threshold = {
+        sg_cfg <- load_source_config("config/sources/soilgrids.yml")
+        sg_cfg$pca$variance_threshold %||% 0.95
+      }
+    )
+  ),
+  tar_target(
+    combined_panel,
+    apply_soil_pca_to_panel(combined_panel_raw, soil_pca_model)
   ),
 
   # ── Global panel (all countries) ─────────────────────────────
@@ -320,7 +380,8 @@ list(
           prediction_year  = decade,
           label            = paste0("global_", decade),
           output_dir       = out_dir,
-          root_dir         = "."
+          root_dir         = ".",
+          soil_pca_model   = soil_pca_model
         )
         paths <- c(paths, path)
       }

@@ -11,7 +11,7 @@ source:
 
 storage:
   raw_path: "data/raw/global/elevation/copernicus_dem_glo30/"
-  processed_path: "data/intermediate/features/elevation_10m.tif"
+  processed_path: "data/intermediate/features/wc2.1_30s_elev.tif"
 
 processing:
   input_crs: "EPSG:4326"

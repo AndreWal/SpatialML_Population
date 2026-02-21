@@ -43,7 +43,16 @@ load_source_config <- function(source_config, root_dir = ".") {
 #' @return A terra SpatRaster.
 load_raster <- function(source_cfg, feature_entry,
                         canonical_crs = "EPSG:3035", root_dir = ".") {
-  processed_path <- file.path(root_dir, source_cfg$storage$processed_path %||% "")
+  # Feature-level processed_path override: allows multiple features
+
+  # (e.g. slope_mean, tri_mean) to share one source config while
+  # pointing to different raster files.
+  override_path <- feature_entry$processed_path
+  if (!is.null(override_path) && nzchar(override_path)) {
+    processed_path <- file.path(root_dir, override_path)
+  } else {
+    processed_path <- file.path(root_dir, source_cfg$storage$processed_path %||% "")
+  }
   raw_path <- file.path(root_dir, source_cfg$storage$raw_path %||% "")
 
   # Try processed first, then raw
@@ -252,6 +261,18 @@ extract_and_join_features <- function(panel_sf, feature_registry,
       panel_sf = panel_sf,
       stat = stat,
       feature_col = feature_id
+    )
+  }
+
+  # Extract SoilGrids zonal features (if source config exists)
+  soilgrids_cfg_path <- file.path(root_dir, "config", "sources", "soilgrids.yml")
+  if (file.exists(soilgrids_cfg_path)) {
+    soilgrids_cfg <- yaml::read_yaml(soilgrids_cfg_path, eval.expr = FALSE)
+    panel_sf <- extract_soil_zonal_features(
+      panel_sf      = panel_sf,
+      soilgrids_cfg = soilgrids_cfg,
+      canonical_crs = canonical_crs,
+      root_dir      = root_dir
     )
   }
 

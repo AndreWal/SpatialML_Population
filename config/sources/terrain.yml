@@ -1,0 +1,18 @@
+source:
+  id: "terrain"
+  derived_from: "elevation"
+  provider: "Derived from WorldClim v2.1 elevation raster"
+  version: "2.1"
+  license: "CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/)"
+
+storage:
+  # Output rasters – same directory as the elevation source
+  slope_path: "data/intermediate/features/slope_30s.tif"
+  tri_path:   "data/intermediate/features/tri_30s.tif"
+
+processing:
+  zonal_stat: "mean"
+
+temporal:
+  reference_year: null
+  apply_to_years: "all"

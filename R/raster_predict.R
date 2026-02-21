@@ -58,12 +58,15 @@ create_prediction_grid <- function(panel_sf, resolution_m = 1000,
 #'   \code{year_XXXX} dummy layer to 1 (all others 0).
 #' @param feature_names Character vector of feature names from the trained
 #'   model; used to determine which \code{year_XXXX} dummy layers to create.
+#' @param soil_pca_model Optional list from \code{fit_soil_pca}; when provided,
+#'   soil PCA component layers are added to the stack.
 #' @return A multi-layer SpatRaster with one layer per feature.
 build_feature_stack <- function(grid_template, feature_registry,
                                 canonical_crs = "EPSG:3035",
                                 root_dir = ".",
                                 resolution_m = 1000, prediction_year = NULL,
-                                feature_names = NULL) {
+                                feature_names = NULL,
+                                soil_pca_model = NULL) {
   layers <- list()
 
   for (feature_entry in feature_registry) {
@@ -127,6 +130,22 @@ build_feature_stack <- function(grid_template, feature_registry,
   terra::values(lat_lyr) <- xy_wgs84[, 2L]
   names(lat_lyr) <- "lat"
   layers[["lat"]] <- lat_lyr
+
+  # Soil PCA component layers (from fitted PCA + cached soil rasters)
+  if (!is.null(soil_pca_model)) {
+    sg_cfg <- load_source_config("config/sources/soilgrids.yml", root_dir = root_dir)
+    soil_pc_stack <- build_soil_pca_raster_stack(
+      grid_template = grid_template,
+      soil_pca_model = soil_pca_model,
+      canonical_crs  = canonical_crs,
+      root_dir       = root_dir,
+      processed_dir  = sg_cfg$storage$processed_dir %||%
+                         "data/intermediate/features/soilgrids"
+    )
+    for (nm in names(soil_pc_stack)) {
+      layers[[nm]] <- soil_pc_stack[[nm]]
+    }
+  }
 
   terra::rast(layers)
 }
@@ -207,13 +226,16 @@ write_prediction_raster <- function(pred_raster, label, model_id,
 #' @param label File-name prefix (e.g. \code{"global_1990"}).
 #' @param output_dir Output directory.
 #' @param root_dir Project root.
+#' @param soil_pca_model Optional list from \code{fit_soil_pca}; forwarded to
+#'   \code{build_feature_stack} for soil PCA raster layers.
 #' @return Character path of written GeoTIFF.
 run_raster_prediction <- function(best_cv_result, panel_sf, feature_registry,
                                   ml_cfg, canonical_crs = "EPSG:3035",
                                   prediction_year = NULL,
                                   label = "global",
                                   output_dir = "data/final/predictions",
-                                  root_dir = ".") {
+                                  root_dir = ".",
+                                  soil_pca_model = NULL) {
 
   resolution_m <- ml_cfg$ml$raster_prediction$resolution_m %||% 1000
   clamp        <- ml_cfg$ml$raster_prediction$clamp_to_training_range %||% TRUE
@@ -240,7 +262,8 @@ run_raster_prediction <- function(best_cv_result, panel_sf, feature_registry,
     root_dir         = root_dir,
     resolution_m     = resolution_m,
     prediction_year  = prediction_year,
-    feature_names    = best_cv_result$feature_names
+    feature_names    = best_cv_result$feature_names,
+    soil_pca_model   = soil_pca_model
   )
 
   # Get training y for clamping

@@ -12,6 +12,11 @@ Produced per country after assembly, harmonization, CRS transform, QA validation
 | `year` | integer | yes | panel year/decade |
 | `population` | numeric | yes | weighted/summed during harmonization |
 | `elevation_mean` | numeric | yes (current config) | enabled raster feature from `config/sources/features.yml` |
+| `slope_mean` | numeric | yes (current config) | mean slope in degrees per admin unit; derived from elevation DEM via `terra::terrain()` |
+| `tri_mean` | numeric | yes (current config) | mean Terrain Ruggedness Index per admin unit; derived from elevation DEM via `terra::terrain()` |
+| `dist_coast_km` | numeric | yes (current config) | mean cost-distance to nearest coastline (km, slope-penalised via least-cost path); Natural Earth 10m coastline |
+| `dist_river_km` | numeric | yes (current config) | mean cost-distance to nearest major river (km, slope-penalised via least-cost path); HydroRIVERS v1.0, Strahler ≥ 4 |
+| `soil_pc1` … `soil_pcN` | numeric | yes | PCA components from SoilGrids 250m v2.0 (61 raw layers → N PCs at 95% variance); see `config/sources/soilgrids.yml` |
 | `log_area` | numeric | yes | `log1p` polygon area in m^2 (canonical CRS) |
 | `lon` | numeric | yes | centroid longitude in EPSG:4326 |
 | `lat` | numeric | yes | centroid latitude in EPSG:4326 |
@@ -19,7 +24,11 @@ Produced per country after assembly, harmonization, CRS transform, QA validation
 
 Notes:
 - Additional feature columns appear when enabled in `config/sources/features.yml`.
-- Current default feature registry enables `elevation_mean` only.
+- Current default feature registry enables `elevation_mean`, `slope_mean`, `tri_mean`, `dist_coast_km`, and `dist_river_km`.
+- Terrain features (`slope_mean`, `tri_mean`) are derived from the elevation DEM — no separate download.
+- Water distance features (`dist_coast_km`, `dist_river_km`) use least-cost path analysis (`terra::costDist()`) with slope as friction surface; computed from Natural Earth coastline and HydroRIVERS v1.0 data.
+- SoilGrids soil properties (61 raw layers across 11 properties × depths) are extracted per country, then PCA-reduced to `soil_pc1`…`soil_pcN` on the combined panel. The number of components N is set by the cumulative-variance threshold in `config/sources/soilgrids.yml` (default 95%).
+- Raw `soil_*` columns are dropped after PCA; only `soil_pc*` columns persist in the model matrix.
 
 Primary key:
 - `country_code + admin_unit_harmonized + year`
@@ -35,7 +44,8 @@ Schema matches country panel columns (without geometry in parquet).
 ## Model matrix schema (internal)
 
 `prepare_model_data()` creates the training matrix from panel columns:
-- Base features: enabled registry features (currently `elevation_mean`)
+- Base features: enabled registry features (currently `elevation_mean`, `slope_mean`, `tri_mean`, `dist_coast_km`, `dist_river_km`)
+- Soil PCA features (auto-detected): `soil_pc1`, `soil_pc2`, …, `soil_pcN`
 - Derived scalar features (auto-appended when available): `log_area`, `lon`, `lat`
 - Time encoding: one-hot year dummy columns derived from observed years, e.g. `year_1850`, `year_1860`, ..., `year_2020`
 
