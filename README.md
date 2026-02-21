@@ -1,70 +1,82 @@
 # 🌍 Spatial Predictions
 
-A reproducible pipeline for estimating historical sub-national population across European countries (1850–2020). It assembles harmonized admin-level panels, extracts raster features, trains gradient boosting and random forest models with spatial block cross-validation, and writes decade-by-decade prediction rasters.
+A reproducible geospatial ETL and spatial machine learning workflow for historical sub-national population estimation in Europe (1850-2020).
 
----
+## 🧪 Project
 
-## 🎯 What this repo does
+This repository supports comparative population reconstruction across countries with heterogeneous historical records. National tabular and boundary datasets are harmonized into a common panel, enriched with geospatial predictors, and used to train spatially aware predictive models.
 
-**🔍 Problem.** Population data for historical periods is scattered across heterogeneous national archives with unstable admin boundaries. This pipeline harmonizes those records into a single panel keyed by `(country_code, admin_unit_harmonized, year)`, then uses spatially aware ML to estimate population where historical observations are absent.
+Primary goal:
+- estimate population patterns for administrative units and periods where direct observations are sparse, inconsistent, or missing.
 
-**⚙️ ETL.** For each enabled country the pipeline:
-1. Reads configured tabular and geometry inputs (country-specific CSV/GeoJSON/Parquet formats).
-2. Resolves admin boundary changes through crosswalk tables (`config/crosswalks/<ISO3>.csv`).
-3. Reprojects everything to the canonical equal-area CRS (EPSG:3035).
-4. Validates geometry and QA rules (unique keys, join coverage, CRS).
-5. Extracts configured raster features per admin polygon (elevation, terrain, water-distance, and SoilGrids-derived features), plus derived geometric features.
-6. Writes harmonized outputs to `data/final/<ISO3>/`.
+## ⚙️ Method overview
 
-**🤖 Machine learning.** Once all country panels are assembled:
-- Spatial block CV is created with `spatialsample::spatial_block_cv` (5-fold by default) on the training countries.
-- Three model engines are trained and evaluated: `ranger`, `xgboost`, `lightgbm`.
-- The best model by CV RMSE is selected and evaluated on a spatial holdout set (DEU).
-- Metrics are saved to `models/model_summary.csv` with an `eval_set` column that distinguishes `spatial_cv` from `test_holdout` rows.
+### 1) Country-level harmonization
+For each enabled country, the pipeline:
+1. Loads configured tabular and geometry inputs.
+2. Harmonizes changing administrative units via optional crosswalks.
+3. Reprojects to a shared canonical CRS (`EPSG:3035` by default).
+4. Applies QA checks (key uniqueness, geometry validity, CRS consistency, join coverage).
+5. Extracts configured raster covariates and adds derived geometric covariates.
+6. Writes country panel outputs.
 
-**🗺️ Raster predictions.** The best model is applied to a regular prediction grid (default 1 km resolution in EPSG:3035) for every decade in the panel, producing 20 GeoTIFFs at `data/final/predictions/global_<year>_prediction_<model>.tif`.
+### 2) Cross-country modeling
+After country panels are assembled, the workflow:
+1. Combines country panels into a global panel.
+2. Constructs SoilGrids PCA features (`soil_pc1` to `soil_pcN`).
+3. Creates spatial block cross-validation folds.
+4. Trains and tunes `ranger`, `xgboost`, and `lightgbm` models.
+5. Selects the best model by cross-validated RMSE.
+6. Evaluates final performance on a holdout country (`DEU` by default).
+7. Generates year/decade-specific prediction rasters.
 
----
+## 🌐 Included countries (current config)
 
-## 📊 Feature set
+The table below reflects `countries.enabled` in `config/global/project.yml` and the corresponding country config files.
 
-| Feature | Source | Notes |
-|---|---|---|
-| `elevation_mean` | ⛰️ DEM raster, zonal mean per polygon | configured in `config/sources/elevation.yml` |
-| `slope_mean`, `tri_mean` | 🏔️ Terrain derivatives from DEM | configured in `config/sources/terrain.yml` |
-| `dist_coast_km`, `dist_river_km` | 🌊 Terrain-weighted least-cost distance to water | configured in `config/sources/water_distance.yml` |
-| `soil_pc1` … `soil_pcN` | 🌱 PCA components from SoilGrids zonal means | configured in `config/sources/soilgrids.yml` |
-| `log_area` | 📐 `sf::st_area()` → log1p | computed in EPSG:3035 (equal-area) |
-| `lon`, `lat` | 📍 WGS84 centroid coordinates | reprojected to EPSG:4326 for extraction |
-| `year_1850` … `year_2020` | 📅 Binary one-hot decade dummies | one column per decade present in the panel |
+| ISO3 | Country | Time frame in panel | Administrative unit |
+|---|---|---|---|
+| `DEU` | Germany | `1890`, `1900`, `1910` | Harmonized electoral districts (`target_unit_id: ADM_HARM_DEU_V1`; raw ID: `Wahlkreis_Nummer`) |
+| `NLD` | Netherlands | `1850`, `1860`, `1870`, `1880`, `1890`, `1900`, `1910`, `1920`, `1930`, `1940`, `1950`, `1960`, `1970`, `1990`, `2000`, `2010`, `2020` | Harmonized municipalities (`target_unit_id: ADM_HARM_NLD_V1`; raw ID: `GMDNR`) |
 
----
+## 🧭 Predictor set
+
+Configured raster predictors:
+- `elevation_mean`
+- `slope_mean`
+- `tri_mean`
+- `dist_coast_km`
+- `dist_river_km`
+
+Additional modeling covariates:
+- `soil_pc1` to `soil_pcN` (SoilGrids PCA)
+- `log_area`
+- `lon`, `lat`
+- `year_<value>` dummy variables
+
+Source definitions, provenance, and licensing are documented in `docs/FEATURE_SOURCES.md`.
 
 ## 📦 Outputs
 
-| Path | Description |
-|---|---|
-| `data/final/<ISO3>/<ISO3>_panel.gpkg` | Harmonized country panel (vector) |
-| `data/final/<ISO3>/<ISO3>_panel.parquet` | Same panel in columnar format |
-| `data/final/global_panel.gpkg` / `.parquet` | All countries combined |
-| `data/final/predictions/global_<year>_prediction_<model>.tif` | Decade population raster |
-| `models/model_summary.csv` | CV + holdout metrics in one table |
-| `models/cv_summary.csv` | CV summary metrics per model |
-| `models/<model_id>_folds.csv` | Per-fold CV diagnostics |
+Core output artifacts:
+- `data/final/<ISO3>/<ISO3>_panel.gpkg`
+- `data/final/<ISO3>/<ISO3>_panel.parquet`
+- `data/final/global_panel.gpkg`
+- `data/final/global_panel.parquet`
+- `data/final/predictions/global_<year>_prediction_<model_id>.tif`
+- `models/model_summary.csv`
+- `models/cv_summary.csv`
+- `models/<model_id>_folds.csv`
+- `models/<model_id>_final.rds`
 
----
+Column-level schema is specified in `docs/DATA_SCHEMA.md`.
 
-## 🚀 Quickstart
+## 🚀 Running the pipeline
 
-### 🐳 Docker (recommended — full environment)
+### 🐳 Docker
 
 ```bash
 docker compose run --rm pipeline
-```
-
-Raw data must be mounted before the pipeline can run:
-```yaml
-# docker-compose.yml already mounts ./data/raw → /project/data/raw (read-only)
 ```
 
 ### 💻 Local
@@ -80,55 +92,49 @@ R -q -e "targets::tar_make()"
 R -q -e "testthat::test_dir('tests/testthat')"
 ```
 
----
+## 🗂️ Configuration structure
 
-## ⚙️ Configuration
+- `config/global/project.yml`: enabled countries, project seed
+- `config/global/crs.yml`: canonical CRS
+- `config/global/ml.yml`: model setup, CV, holdout country, raster prediction settings
+- `config/global/qa.yml`: QA thresholds and behavior
+- `config/global/paths.yml`: output directory settings
+- `config/countries/<ISO3>.yml`: country-specific input mappings and assembly logic
+- `config/crosswalks/<ISO3>.csv`: harmonization crosswalk tables
+- `config/sources/features.yml`: active feature registry
+- `config/sources/*.yml`: source-specific acquisition and processing settings
 
-| File / directory | Purpose |
-|---|---|
-| `config/global/project.yml` | Enabled countries, project seed |
-| `config/global/crs.yml` | Canonical CRS (EPSG:3035) |
-| `config/global/ml.yml` | Model specs, CV folds, holdout country, raster resolution |
-| `config/global/qa.yml` | QA thresholds (join coverage, geometry rules) |
-| `config/global/paths.yml` | Output directory layout |
-| `config/countries/<ISO3>.yml` | Per-country input paths, column mappings, assembly recipe |
-| `config/crosswalks/<ISO3>.csv` | Admin boundary crosswalk (from/to unit, weight) |
-| `config/sources/features.yml` | Feature registry (id, source config, enabled flag) |
-| `config/sources/<feature>.yml` | Raster source config (raw/processed paths, zonal stat) |
+## ➕ Adding a country case
 
----
-
-## ➕ Adding a country
-
-1. Place tabular and geometry files in `data/raw/<ISO3>/`.
-2. Create `config/countries/<ISO3>.yml` following the existing DEU/NLD templates.
-3. Optionally add `config/crosswalks/<ISO3>.csv` if admin boundaries changed over time.
-4. Add `<ISO3>` to `config/global/project.yml::countries.enabled`.
-5. Run `targets::tar_make()` — only the new-country targets are (re-)built.
-
----
+1. Add raw files under `data/raw/<ISO3>/`.
+2. Add `config/countries/<ISO3>.yml`.
+3. Add `config/crosswalks/<ISO3>.csv` if harmonization is required.
+4. Add `<ISO3>` under `countries.enabled` in `config/global/project.yml`.
+5. Re-run `targets::tar_make()`.
 
 ## 🔁 Reproducibility
 
-- **Packages**: `renv.lock` pins all R package versions.
-- **Environment**: `Dockerfile` + `docker-compose.yml` (`rocker/geospatial:4.5.2`).
-- **Pipeline**: `targets` with dynamic branching per country; stale targets are detected and rebuilt automatically.
-- **Seed**: set in `config/global/project.yml::project.seed` and forwarded to all random operations.
-- **CI**: GitHub Actions (`.github/workflows/ci.yml`) runs the test suite on every push.
-
----
+- Dependency versions are locked in `renv.lock`.
+- Workflow orchestration and caching are managed by `targets`.
+- Containerized execution is defined by `Dockerfile` and `docker-compose.yml`.
+- Pipeline behavior is config-driven and country-extensible.
 
 ## 📁 Repository layout
 
-```
-_targets.R              # Pipeline definition (all targets)
-R/                      # Pure functions: IO, ETL, features, models, evaluation
-config/                 # All configuration (no hardcoded paths in code)
-data/raw/               # Source data — not committed, mounted at runtime
-data/final/             # Pipeline outputs (panels, rasters)
-models/                 # Trained models (.rds) and metrics (.csv)
-docs/                   # PROJECT_SPEC.md, DATA_SCHEMA.md, FEATURE_SOURCES.md
-tests/testthat/         # Unit + integration tests
+```text
+_targets.R              Pipeline definition
+R/                      Pipeline functions
+config/                 Global, country, and source configuration
+data/raw/               Input data (not committed)
+data/final/             Final outputs
+models/                 Trained models and evaluation artifacts
+docs/                   Project spec, schema, and feature source documentation
+tests/testthat/         Test suite
 ```
 
-See `docs/PROJECT_SPEC.md` for the full pipeline contract and `docs/DATA_SCHEMA.md` for the output column schema.
+## 📚 Canonical documentation
+
+Use these files as source of truth:
+1. `docs/PROJECT_SPEC.md`
+2. `docs/DATA_SCHEMA.md`
+3. `docs/FEATURE_SOURCES.md`
