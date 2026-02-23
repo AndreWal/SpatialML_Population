@@ -268,15 +268,34 @@ run_raster_prediction <- function(best_cv_result, panel_sf, feature_registry,
 
   # Get training y for clamping
   target_var <- ml_cfg$ml$target_variable %||% "population"
-  train_y    <- as.numeric(sf::st_drop_geometry(panel_sf)[[target_var]])
+  target_info <- best_cv_result$target_info %||% list(
+    target_var = target_var,
+    response_kind = "raw_target",
+    transform = "identity",
+    needs_area = FALSE
+  )
+  train_y_vals <- target_response_from_panel(panel_sf, target_info)
+  train_y_model <- train_y_vals$y_model
 
   pred_raster <- predict_to_raster(
     model         = best_cv_result$final_model,
     feature_stack = feature_stack,
     feature_names = best_cv_result$feature_names,
     clamp         = clamp,
-    train_y       = train_y
+    train_y       = train_y_model
   )
+
+  if (isTRUE(target_info$needs_area)) {
+    cell_area_m2 <- resolution_m^2
+    pred_vals <- terra::values(pred_raster, mat = FALSE)
+    pred_vals_count <- inverse_target_response(
+      pred_vals,
+      target_info = target_info,
+      area_m2 = rep(cell_area_m2, length(pred_vals))
+    )
+    terra::values(pred_raster) <- pred_vals_count
+    names(pred_raster) <- "prediction"
+  }
 
   write_prediction_raster(
     pred_raster = pred_raster,

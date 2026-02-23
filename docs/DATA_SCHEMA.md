@@ -51,6 +51,10 @@ Schema matches country panel columns (without geometry in parquet).
 
 Target:
 - `population` (default from `config/global/ml.yml::ml.target_variable`)
+- Internal modeling response preprocessing when target is `population`:
+  - Convert to density in persons per m² using polygon area (`population / area_m2`)
+  - Compute sample skewness on density and apply `log1p(density)` when skewness > 1
+  - `holdout` and raster predictions are inverse-transformed back to population counts for reporting/output
 
 Complete-case filtering is applied to target + all selected feature columns.
 
@@ -64,6 +68,8 @@ One row per model/evaluation split.
 | `model_id` | character | configured model ID (e.g. `rf`, `xgb`, `lgbm`) |
 | `engine` | character | model engine (`ranger`, `xgboost`, `lightgbm`) |
 | `eval_set` | character | `spatial_cv` or `test_holdout` |
+| `response_kind` | character | metric target scale (`population_count` for holdout rows; modeled response for CV rows) |
+| `response_transform` | character | response transform used (`identity`, `log1p`, or `inverse_to_count`) |
 | `countries` | character | training-country set (for CV) or holdout country ISO3 |
 | `n_folds` | integer | number of CV folds (`NA` for holdout row) |
 | `n_obs` | integer | evaluated observations |
@@ -79,6 +85,8 @@ One row per configured model with CV-only summary metrics.
 | `model_id` | character | |
 | `engine` | character | |
 | `eval_set` | character | always `spatial_cv` |
+| `response_kind` | character | modeled response representation (e.g. `population_density_per_m2`) |
+| `response_transform` | character | transform on modeled response (e.g. `identity`, `log1p`) |
 | `n_cv_folds` | integer | number of CV folds |
 | `n_cv_obs` | integer | observations used for CV |
 | `train_countries` | character | `+`-joined ISO3 set |
@@ -104,6 +112,10 @@ Per-fold CV diagnostics.
 - `models/<model_id>_final.rds`
 - Contains fitted `parsnip`/`workflow` model trained on all non-holdout rows.
 
+### Variable-importance plots
+- `models/variable_importance/<model_id>_var_importance.png`
+- Horizontal bar plot of top feature importances extracted from the final fitted model (engine-specific importance metric).
+
 ## Prediction raster outputs
 
 Path pattern:
@@ -112,6 +124,7 @@ Path pattern:
 Semantics:
 - One raster per unique year/decade in `combined_panel$year`.
 - Raster feature stack includes enabled raster features plus constant layers for `log_area`, `lon`, `lat`, and year dummy layers matching the trained model feature names.
+- If the model was trained on density (optionally log-transformed), raster predictions are inverse-transformed to per-cell population counts before writing.
 - Output CRS is canonical CRS.
 
 ## DuckDB intermediate store

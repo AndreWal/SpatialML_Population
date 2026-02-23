@@ -60,17 +60,20 @@ After country ETL:
    - `panel_all`
 5. Prepare model matrix from enabled feature columns plus derived columns and year dummies.
 6. Create spatial block CV folds (`spatialsample::spatial_block_cv`).
-7. Train/tune configured models (supported engines: `ranger`, `xgboost`, `lightgbm`).
+7. Train/tune configured models (supported engines: `ranger`, `xgboost`, `lightgbm`) on a model response derived from the target:
+   - if target is `population`, convert to population density (`population / area_m^2`)
+   - if density is positively skewed (sample skewness > 1), apply `log1p` before training
 8. Save CV summaries, fold metrics, and final model objects.
 9. Select best model by CV RMSE.
 10. Evaluate best model on the holdout country.
 11. Write combined model summary CSV.
 12. Optionally log runs to MLflow.
 13. Produce one global prediction raster per decade/year present in the combined panel.
+    - If trained on density/log-density, raster predictions are inverse-transformed and written as per-cell population counts.
 
 ## Config-driven model setup
 From `config/global/ml.yml` defaults:
-- Target variable: `population`
+- Target variable: `population` (internally converted to density for model fitting; optional `log1p` if skewed)
 - CV folds: `5`
 - Holdout test country: `DEU`
 - Models configured: `rf` (`ranger`), `xgb` (`xgboost`), `lgbm` (`lightgbm`)
@@ -88,7 +91,7 @@ Global QA config in `config/global/qa.yml` plus optional country overrides:
 ## Output contract (high level)
 - Country panels: `data/final/<ISO3>/<ISO3>_panel.gpkg`, `.parquet`
 - Global panel: `data/final/global_panel.gpkg`, `.parquet`
-- Models/metrics: `models/cv_summary.csv`, `models/<model_id>_folds.csv`, `models/<model_id>_final.rds`, `models/model_summary.csv`
+- Models/metrics: `models/cv_summary.csv`, `models/<model_id>_folds.csv`, `models/<model_id>_final.rds`, `models/model_summary.csv`, `models/variable_importance/<model_id>_var_importance.png`
 - Prediction rasters: `data/final/predictions/global_<year>_prediction_<best_model_id>.tif`
 - DuckDB cache: `cache/panels.duckdb`
 

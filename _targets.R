@@ -16,7 +16,7 @@ source(file.path("R", "water_distance.R"))
 source(file.path("R", "duckdb_store.R"))
 
 tar_option_set(
-  packages = c("yaml", "sf", "arrow", "terra", "ranger", "xgboost", "lightgbm", "tidymodels", "bonsai", "spatialsample", "doParallel", "duckdb", "DBI")
+  packages = c("yaml", "sf", "arrow", "terra", "exactextractr", "ranger", "xgboost", "lightgbm", "tidymodels", "bonsai", "spatialsample", "doParallel", "duckdb", "DBI")
 )
 
 list(
@@ -42,9 +42,13 @@ list(
   tar_target(ml_cfg,      read_yaml_file(ml_cfg_file)),
 
   # ── Feature registry ──────────────────────────────────────────
+  tar_target(features_cfg_file, file.path("config", "sources", "features.yml"), format = "file"),
   tar_target(
     feature_registry,
-    load_feature_registry(root_dir = ".")
+    {
+      features_cfg_file          # tracked dependency — invalidates when YAML changes
+      load_feature_registry(root_dir = ".")
+    }
   ),
 
   # ── Country ETL (branched) ────────────────────────────────────

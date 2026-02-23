@@ -10,6 +10,7 @@
             "approve": true,
             "matchCommandLine": true
         },
-        "docker compose": true
+        "docker compose": true,
+        "docker rm": true
     }
 }

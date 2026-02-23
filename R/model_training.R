@@ -69,9 +69,15 @@ run_spatial_cv <- function(model_spec, model_data, resamples, ml_cfg, seed = 42L
   # Register a parallel backend for fold and HP-candidate evaluation.
   # Each engine is configured to use 1 internal thread so that the N_workers
   # parallel fold processes do not oversubscribe the CPU.
-  n_workers <- max(1L, parallel::detectCores(logical = FALSE) - 1L)
-  doParallel::registerDoParallel(cores = n_workers)
-  on.exit(doParallel::stopImplicitCluster(), add = TRUE)
+  n_cores   <- parallel::detectCores(logical = FALSE)
+  n_workers <- max(1L, n_cores - 1L)
+  cl <- parallel::makeForkCluster(n_workers)
+  doParallel::registerDoParallel(cl)
+  on.exit({ parallel::stopCluster(cl); foreach::registerDoSEQ() }, add = TRUE)
+  message(sprintf(
+    "[cv] Parallel backend: %d workers on %d cores (foreach=%s)",
+    n_workers, n_cores, foreach::getDoParName()
+  ))
 
   # Build parsnip spec and workflow (.outcome ~ . uses all X columns)
   spec <- make_parsnip_spec(engine, seed = seed)
@@ -101,7 +107,7 @@ run_spatial_cv <- function(model_spec, model_data, resamples, ml_cfg, seed = 42L
         verbose      = FALSE,
         no_improve   = 15L,
         seed         = seed,
-        parallel_over = "everything"  # parallelise across folds AND candidates
+        parallel_over = "resamples"  # parallelise across folds AND candidates
       )
     )
 
@@ -121,7 +127,11 @@ run_spatial_cv <- function(model_spec, model_data, resamples, ml_cfg, seed = 42L
     wf,
     resamples = resamples,
     metrics   = yardstick::metric_set(yardstick::rmse, yardstick::mae, yardstick::rsq),
-    control   = tune::control_resamples(save_pred = FALSE, allow_par = TRUE)
+    control   = tune::control_resamples(
+      save_pred     = FALSE,
+      allow_par     = TRUE,
+      parallel_over = "resamples"
+    )
   )
 
   raw_metrics <- tune::collect_metrics(cv_res, summarize = FALSE)
@@ -167,6 +177,7 @@ run_spatial_cv <- function(model_spec, model_data, resamples, ml_cfg, seed = 42L
     final_model     = final_fit,
     best_hp         = best_hp,
     feature_names   = model_data$feature_names,
+    target_info     = model_data$target_info,
     n_obs           = nrow(df),
     n_folds         = length(fold_results)
   )

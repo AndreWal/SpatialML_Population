@@ -242,6 +242,24 @@ compute_water_distance_rasters <- function(water_cfg,
   slope_r     <- terra::rast(slope_path)
   penalty     <- as.numeric(water_cfg$processing$slope_penalty %||% 5)
 
+  # Validate that DEM and slope are in the canonical CRS.
+  # A CRS mismatch (e.g. DEM in EPSG:4326) would silently produce garbage
+  # distance rasters with wrong coordinates.
+  if (!terra::same.crs(dem, terra::crs(canonical_crs))) {
+    message(sprintf(
+      "[water] DEM is not in %s (has %s) — reprojecting.",
+      canonical_crs, terra::crs(dem, describe = TRUE)$code
+    ))
+    dem <- terra::project(dem, canonical_crs)
+  }
+  if (!terra::same.crs(slope_r, terra::crs(canonical_crs))) {
+    message(sprintf(
+      "[water] Slope raster is not in %s — reprojecting.",
+      canonical_crs
+    ))
+    slope_r <- terra::project(slope_r, canonical_crs)
+  }
+
   bb <- as.numeric(unlist(
     water_cfg$processing$bbox_wgs84 %||% c(-10, 40, 20, 60)
   ))

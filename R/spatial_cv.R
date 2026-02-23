@@ -2,6 +2,99 @@
   if (is.null(x)) y else x
 }
 
+compute_sample_skewness <- function(x) {
+  x <- as.numeric(x)
+  x <- x[is.finite(x)]
+  if (length(x) < 3L) {
+    return(NA_real_)
+  }
+  s <- stats::sd(x)
+  if (!is.finite(s) || s <= 0) {
+    return(0)
+  }
+  m <- mean(x)
+  mean(((x - m) / s)^3)
+}
+
+build_target_info <- function(panel_sf, target_var = "population",
+                              skew_threshold = 1) {
+  df <- sf::st_drop_geometry(panel_sf)
+  y_raw <- as.numeric(df[[target_var]])
+
+  info <- list(
+    target_var = target_var,
+    response_kind = "raw_target",
+    transform = "identity",
+    skewness = NA_real_,
+    skew_threshold = skew_threshold,
+    needs_area = FALSE,
+    area_unit = NA_character_
+  )
+
+  if (!identical(target_var, "population")) {
+    return(info)
+  }
+
+  areas_m2 <- tryCatch(
+    as.numeric(sf::st_area(panel_sf)),
+    error = function(e) rep(NA_real_, nrow(panel_sf))
+  )
+  density <- y_raw / areas_m2
+  valid <- is.finite(density) & density >= 0
+  skew <- compute_sample_skewness(density[valid])
+  use_log <- is.finite(skew) && skew > skew_threshold
+
+  info$response_kind <- "population_density_per_m2"
+  info$transform <- if (use_log) "log1p" else "identity"
+  info$skewness <- skew
+  info$needs_area <- TRUE
+  info$area_unit <- "m2"
+
+  info
+}
+
+target_response_from_panel <- function(panel_sf, target_info) {
+  df <- sf::st_drop_geometry(panel_sf)
+  y_raw <- as.numeric(df[[target_info$target_var %||% "population"]])
+
+  if (!isTRUE(target_info$needs_area)) {
+    y_model <- y_raw
+  } else {
+    area_m2 <- tryCatch(
+      as.numeric(sf::st_area(panel_sf)),
+      error = function(e) rep(NA_real_, nrow(panel_sf))
+    )
+    y_model <- y_raw / area_m2
+  }
+
+  if (identical(target_info$transform, "log1p")) {
+    y_model <- ifelse(is.finite(y_model) & y_model >= 0, log1p(y_model), NA_real_)
+  }
+
+  list(
+    y_model = as.numeric(y_model),
+    y_raw = y_raw
+  )
+}
+
+inverse_target_response <- function(y_pred_model, target_info, area_m2 = NULL) {
+  y <- as.numeric(y_pred_model)
+
+  if (identical(target_info$transform, "log1p")) {
+    y <- expm1(y)
+  }
+  y <- pmax(y, 0)
+
+  if (isTRUE(target_info$needs_area)) {
+    if (is.null(area_m2)) {
+      stop("area_m2 is required to invert density predictions to counts", call. = FALSE)
+    }
+    y <- y * as.numeric(area_m2)
+  }
+
+  as.numeric(y)
+}
+
 #' Create spatial block CV resamples using spatialsample
 #'
 #' Partitions space into \code{v} contiguous blocks using
@@ -103,16 +196,28 @@ prepare_model_data <- function(panel_sf, ml_cfg, feature_registry) {
     feature_names <- c(feature_names, year_dummy_names)
   }
 
-  y <- as.numeric(df[[target_var]])
+  target_info <- build_target_info(panel_sf, target_var = target_var)
+  target_vals <- target_response_from_panel(panel_sf, target_info)
+  y <- target_vals$y_model
   X <- df[, feature_names, drop = FALSE]
 
   # Handle complete cases only
   complete <- complete.cases(cbind(y, X))
 
+  if (identical(target_info$response_kind, "population_density_per_m2")) {
+    msg <- sprintf(
+      "[target] Using population density (per m^2) with %s transform (skewness=%.3f, threshold=%.3f)",
+      target_info$transform, target_info$skewness %||% NA_real_, target_info$skew_threshold %||% NA_real_
+    )
+    message(msg)
+  }
+
   list(
     y = y[complete],
     X = X[complete, , drop = FALSE],
     feature_names = feature_names,
-    complete_idx = which(complete)
+    complete_idx = which(complete),
+    target_info = target_info,
+    target_raw = target_vals$y_raw[complete]
   )
 }

@@ -67,6 +67,6 @@ RUN for i in 1 2 3 4 5; do \
         echo "renv::restore attempt $i failed, retrying in 20 s..." >&2; \
         sleep 20; \
     done \
-    && R -q -e "library(sf); library(terra); library(arrow); library(duckdb); library(targets); cat('All packages OK\n')"
+    && R -q -e "library(sf); library(terra); library(arrow); library(duckdb); library(targets); library(exactextractr); cat('All packages OK\n')"
 
 CMD ["R", "-q", "-e", "targets::tar_make()"]

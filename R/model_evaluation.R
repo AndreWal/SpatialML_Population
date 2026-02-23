@@ -22,6 +22,96 @@ compute_metrics <- function(observed, predicted) {
   list(rmse = rmse, mae = mae, rsq = rsq)
 }
 
+default_target_info <- function(target_var = "population") {
+  list(
+    target_var = target_var,
+    response_kind = "raw_target",
+    transform = "identity",
+    needs_area = FALSE
+  )
+}
+
+extract_variable_importance_df <- function(cv_result) {
+  engine_fit <- workflows::extract_fit_engine(cv_result$final_model)
+  engine <- cv_result$engine %||% ""
+
+  if (identical(engine, "ranger")) {
+    vi <- engine_fit$variable.importance %||% numeric(0)
+    if (!length(vi)) return(NULL)
+    out <- data.frame(
+      feature = names(vi),
+      importance = as.numeric(vi),
+      stringsAsFactors = FALSE
+    )
+  } else if (identical(engine, "xgboost")) {
+    vi_tbl <- tryCatch(xgboost::xgb.importance(model = engine_fit), error = function(e) NULL)
+    if (is.null(vi_tbl) || !nrow(vi_tbl)) return(NULL)
+    score_col <- if ("Gain" %in% names(vi_tbl)) "Gain" else names(vi_tbl)[2]
+    out <- data.frame(
+      feature = as.character(vi_tbl$Feature),
+      importance = as.numeric(vi_tbl[[score_col]]),
+      stringsAsFactors = FALSE
+    )
+  } else if (identical(engine, "lightgbm")) {
+    vi_tbl <- tryCatch(lightgbm::lgb.importance(engine_fit), error = function(e) NULL)
+    if (is.null(vi_tbl) || !nrow(vi_tbl)) return(NULL)
+    feat_col <- if ("Feature" %in% names(vi_tbl)) "Feature" else names(vi_tbl)[1]
+    score_col <- if ("Gain" %in% names(vi_tbl)) "Gain" else
+      if ("Importance" %in% names(vi_tbl)) "Importance" else names(vi_tbl)[2]
+    out <- data.frame(
+      feature = as.character(vi_tbl[[feat_col]]),
+      importance = as.numeric(vi_tbl[[score_col]]),
+      stringsAsFactors = FALSE
+    )
+  } else {
+    return(NULL)
+  }
+
+  out <- out[is.finite(out$importance) & !is.na(out$feature), , drop = FALSE]
+  out <- out[order(out$importance, decreasing = TRUE), , drop = FALSE]
+  rownames(out) <- NULL
+  out
+}
+
+save_variable_importance_plot <- function(cv_result, output_dir = "models",
+                                          root_dir = ".", top_n = 20L) {
+  vi_df <- extract_variable_importance_df(cv_result)
+  if (is.null(vi_df) || nrow(vi_df) < 1L) {
+    warning(sprintf("Skipping variable-importance plot for %s: no importances available",
+                    cv_result$model_id), call. = FALSE)
+    return(NA_character_)
+  }
+
+  vi_dir <- file.path(root_dir, output_dir, "variable_importance")
+  dir.create(vi_dir, recursive = TRUE, showWarnings = FALSE)
+
+  vi_top <- head(vi_df, max(1L, as.integer(top_n)))
+  out_path <- file.path(vi_dir, paste0(cv_result$model_id, "_var_importance.png"))
+
+  grDevices::png(out_path, width = 1200, height = 900, res = 120)
+  op <- graphics::par(no.readonly = TRUE)
+  on.exit({
+    graphics::par(op)
+    grDevices::dev.off()
+  }, add = TRUE)
+
+  graphics::par(mar = c(5, 14, 4, 2))
+  graphics::barplot(
+    height = rev(vi_top$importance),
+    names.arg = rev(vi_top$feature),
+    horiz = TRUE,
+    las = 1,
+    col = "#3B7EA1",
+    border = NA,
+    cex.names = 0.8,
+    main = sprintf("Variable Importance: %s (%s)", cv_result$model_id, cv_result$engine),
+    xlab = "Importance"
+  )
+  graphics::box()
+
+  out_path
+}
+
 #' Summarize cross-validation results across models
 #'
 #' Returns a data.frame where metric columns are prefixed with \code{cv_} and
@@ -38,10 +128,13 @@ summarize_cv_results <- function(cv_results_list, train_countries = NULL) {
   } else NA_character_
 
   rows <- lapply(cv_results_list, function(res) {
+    ti <- res$target_info %||% default_target_info()
     data.frame(
       model_id        = res$model_id,
       engine          = res$engine,
       eval_set        = "spatial_cv",
+      response_kind   = ti$response_kind %||% "raw_target",
+      response_transform = ti$transform %||% "identity",
       n_cv_folds      = res$n_folds %||% NA_integer_,
       n_cv_obs        = res$n_obs   %||% NA_integer_,
       train_countries = train_ctry_str,
@@ -143,6 +236,15 @@ save_cv_results <- function(cv_results_list, output_dir = "models", root_dir = "
     model_path <- file.path(out_dir, paste0(res$model_id, "_final.rds"))
     saveRDS(res$final_model, model_path)
     files_written <- c(files_written, model_path)
+
+    vi_path <- save_variable_importance_plot(
+      cv_result = res,
+      output_dir = output_dir,
+      root_dir = root_dir
+    )
+    if (!is.na(vi_path)) {
+      files_written <- c(files_written, vi_path)
+    }
   }
 
   files_written
@@ -161,6 +263,7 @@ save_cv_results <- function(cv_results_list, output_dir = "models", root_dir = "
 evaluate_holdout <- function(best_cv_result, holdout_panel_sf, ml_cfg,
                              feature_registry) {
   target_var <- ml_cfg$ml$target_variable %||% "population"
+  target_info <- best_cv_result$target_info %||% default_target_info(target_var)
   # Use the exact feature names the final model was trained on (includes log_area, year, etc.)
   feature_names <- best_cv_result$feature_names
   holdout_country <- ml_cfg$ml$holdout_test_country %||% "holdout"
@@ -182,16 +285,22 @@ evaluate_holdout <- function(best_cv_result, holdout_panel_sf, ml_cfg,
                  paste(missing_feat, collapse = ", ")), call. = FALSE)
   }
 
-  y <- as.numeric(df[[target_var]])
+  target_vals <- target_response_from_panel(holdout_panel_sf, target_info)
+  y_model <- target_vals$y_model
+  y_raw <- target_vals$y_raw
   X <- df[, feature_names, drop = FALSE]
-  complete <- complete.cases(cbind(y, X))
+  complete <- complete.cases(cbind(y_model, X))
 
   metrics <- if (sum(complete) < 1L) {
     list(rmse = NA_real_, mae = NA_real_, rsq = NA_real_)
   } else {
-    preds <- predict(best_cv_result$final_model,
-                     new_data = X[complete, , drop = FALSE])$.pred
-    compute_metrics(y[complete], preds)
+    preds_model <- predict(best_cv_result$final_model,
+                           new_data = X[complete, , drop = FALSE])$.pred
+    area_m2 <- if (isTRUE(target_info$needs_area)) {
+      as.numeric(sf::st_area(holdout_panel_sf))[complete]
+    } else NULL
+    preds_count <- inverse_target_response(preds_model, target_info, area_m2 = area_m2)
+    compute_metrics(y_raw[complete], preds_count)
   }
 
   list(
@@ -199,6 +308,8 @@ evaluate_holdout <- function(best_cv_result, holdout_panel_sf, ml_cfg,
     model_id = best_cv_result$model_id,
     engine   = best_cv_result$engine,
     eval_set = "test_holdout",
+    response_kind = "population_count",
+    response_transform = "inverse_to_count",
     n        = sum(complete),
     metrics  = metrics
   )
@@ -233,10 +344,13 @@ write_model_summary <- function(cv_results_list, holdout_metrics_list,
 
   # One row per model for the CV split
   cv_rows <- lapply(cv_results_list, function(res) {
+    ti <- res$target_info %||% default_target_info()
     data.frame(
       model_id   = res$model_id,
       engine     = res$engine,
       eval_set   = "spatial_cv",
+      response_kind = ti$response_kind %||% "raw_target",
+      response_transform = ti$transform %||% "identity",
       countries  = train_ctry_str,
       n_folds    = res$n_folds %||% NA_integer_,
       n_obs      = res$n_obs   %||% NA_integer_,
@@ -253,6 +367,8 @@ write_model_summary <- function(cv_results_list, holdout_metrics_list,
     model_id   = hm$model_id,
     engine     = hm$engine %||% NA_character_,
     eval_set   = "test_holdout",
+    response_kind = hm$response_kind %||% "population_count",
+    response_transform = hm$response_transform %||% "inverse_to_count",
     countries  = hm$country,
     n_folds    = NA_integer_,
     n_obs      = hm$n,

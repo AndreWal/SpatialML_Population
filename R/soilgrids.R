@@ -187,7 +187,8 @@ download_soilgrids_rasters <- function(soilgrids_cfg,
 #' @return sf object with soil_* columns appended.
 extract_soil_zonal_features <- function(panel_sf, soilgrids_cfg,
                                         canonical_crs = "EPSG:3035",
-                                        root_dir = ".") {
+                                        root_dir = ".",
+                                        workers = 1L) {
   processed_dir <- file.path(
     root_dir,
     soilgrids_cfg$storage$processed_dir %||%
@@ -195,27 +196,77 @@ extract_soil_zonal_features <- function(panel_sf, soilgrids_cfg,
   )
   spec <- soilgrids_layer_spec()
 
-  for (i in seq_len(nrow(spec))) {
-    tif_path <- file.path(processed_dir, paste0(spec$col_name[i], ".tif"))
-    if (!file.exists(tif_path)) {
-      warning(sprintf("[soilgrids] Missing raster: %s, filling NA",
-                      basename(tif_path)))
-      panel_sf[[spec$col_name[i]]] <- NA_real_
-      next
-    }
+  tif_paths <- file.path(processed_dir, paste0(spec$col_name, ".tif"))
+  exists_idx <- file.exists(tif_paths)
+  missing_cols <- spec$col_name[!exists_idx]
 
-    r <- terra::rast(tif_path)
-    if (!identical(terra::crs(r, describe = TRUE)$code,
-                   sf::st_crs(canonical_crs)$epsg)) {
-      r <- terra::project(r, canonical_crs)
+  if (length(missing_cols) > 0) {
+    for (col in missing_cols) {
+      warning(sprintf("[soilgrids] Missing raster: %s.tif, filling NA", col))
+      panel_sf[[col]] <- NA_real_
     }
+  }
 
-    panel_sf[[spec$col_name[i]]] <- extract_zonal_stat(
-      raster      = r,
-      panel_sf    = panel_sf,
-      stat        = "mean",
-      feature_col = spec$col_name[i]
-    )
+  if (!any(exists_idx)) {
+    return(panel_sf)
+  }
+
+  present_cols <- spec$col_name[exists_idx]
+  present_paths <- tif_paths[exists_idx]
+
+  message(sprintf(
+    "[soilgrids] Extracting zonal means for %d layers in one stack ...",
+    length(present_paths)
+  ))
+
+  r_stack <- terra::rast(present_paths)
+  names(r_stack) <- present_cols
+  message(sprintf("[soilgrids] Stack loaded: nlyr=%d, ext=%s, CRS=%s",
+                  terra::nlyr(r_stack),
+                  paste(round(as.vector(terra::ext(r_stack)), 0), collapse=","),
+                  terra::crs(r_stack, describe=TRUE)$code))
+
+  if (!terra::same.crs(r_stack, terra::crs(canonical_crs))) {
+    message("[soilgrids] Reprojecting raster stack to canonical CRS ...")
+    r_stack <- terra::project(r_stack, canonical_crs)
+  }
+
+  is_empty <- sf::st_is_empty(panel_sf)
+  out_mat <- matrix(NA_real_, nrow = nrow(panel_sf), ncol = terra::nlyr(r_stack))
+  colnames(out_mat) <- names(r_stack)
+
+  if (!all(is_empty)) {
+    panel_nonempty <- panel_sf[!is_empty, ]
+    message(sprintf("[soilgrids] Non-empty polygons: %d / %d",
+                    nrow(panel_nonempty), nrow(panel_sf)))
+    geom_types <- unique(as.character(sf::st_geometry_type(panel_nonempty)))
+    is_points <- all(geom_types %in% c("POINT", "MULTIPOINT"))
+
+    message(sprintf(
+      "[soilgrids] Extraction (%d polygons, %d layers) via exactextractr ...",
+      nrow(panel_nonempty), terra::nlyr(r_stack)
+    ))
+
+    if (is_points) {
+      # exactextractr does not support points — use terra::extract
+      vals <- terra::extract(r_stack, terra::vect(panel_nonempty),
+                             fun = "mean", na.rm = TRUE)
+      message(sprintf("[soilgrids] Extract returned: %d rows x %d cols",
+                      nrow(vals), ncol(vals)))
+      out_mat[!is_empty, ] <- as.matrix(vals[, -1, drop = FALSE])
+    } else {
+      # exactextractr: C++-threaded, area-weighted, dramatically faster
+      vals_df <- exactextractr::exact_extract(r_stack, panel_nonempty,
+                                              fun = "mean",
+                                              progress = FALSE)
+      message(sprintf("[soilgrids] Extract returned: %d rows x %d cols",
+                      nrow(vals_df), ncol(vals_df)))
+      out_mat[!is_empty, ] <- as.matrix(vals_df)
+    }
+  }
+
+  for (j in seq_along(present_cols)) {
+    panel_sf[[present_cols[j]]] <- out_mat[, j]
   }
 
   panel_sf

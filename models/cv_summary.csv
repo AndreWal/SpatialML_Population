@@ -1,3 +1,0 @@
-"model_id","engine","eval_set","n_cv_folds","n_cv_obs","train_countries","cv_rmse","cv_mae","cv_rsq"
-"rf","ranger","spatial_cv",5,15861,"NLD",28650.9014774719,8579.31420836017,0.183902681023364
-"xgb","xgboost","spatial_cv",5,15861,"NLD",29023.1034343018,9467.70349233108,0.148356560007346

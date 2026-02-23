@@ -31,6 +31,30 @@ load_source_config <- function(source_config, root_dir = ".") {
   yaml::read_yaml(path, eval.expr = FALSE)
 }
 
+#' Resolve configured runtime worker count
+#'
+#' Reads `config/global/project.yml::runtime.parallel_workers` and returns
+#' a safe integer >= 1. Falls back to 1 if config is missing or invalid.
+#'
+#' @param root_dir Project root.
+#' @return Integer worker count.
+get_runtime_parallel_workers <- function(root_dir = ".") {
+  cfg_path <- file.path(root_dir, "config", "global", "project.yml")
+  if (!file.exists(cfg_path)) {
+    return(1L)
+  }
+
+  workers <- tryCatch({
+    cfg <- yaml::read_yaml(cfg_path, eval.expr = FALSE)
+    as.integer(cfg$runtime$parallel_workers %||% 1L)
+  }, error = function(e) 1L)
+
+  if (is.na(workers) || workers < 1L) {
+    return(1L)
+  }
+  workers
+}
+
 #' Load a raster from disk
 #'
 #' Tries the processed path first, then the raw path (directory with .tif tiles).
@@ -79,13 +103,17 @@ load_raster <- function(source_cfg, feature_entry,
   }
 
   r <- terra::rast(raster_path)
-  if (!identical(terra::crs(r, describe = TRUE)$code, sf::st_crs(canonical_crs)$epsg)) {
+  if (!terra::same.crs(r, terra::crs(canonical_crs))) {
     r <- terra::project(r, canonical_crs)
   }
   r
 }
 
 #' Extract zonal statistics from a raster for admin polygons
+#'
+#' Uses \code{exactextractr::exact_extract()} for polygon geometries
+#' (much faster than \code{terra::extract()}, C++-threaded, area-weighted).
+#' Falls back to \code{terra::extract()} for point geometries.
 #'
 #' @param raster A terra SpatRaster.
 #' @param panel_sf sf object with polygon/point geometries.
@@ -104,16 +132,25 @@ extract_zonal_stat <- function(raster, panel_sf, stat = "mean", feature_col = "f
   panel_nonempty <- panel_sf[!is_empty, ]
   geom_types <- unique(as.character(sf::st_geometry_type(panel_nonempty)))
 
+  # Guard: skip extraction if raster has zero extent or no overlap
+  raster_ext <- tryCatch(terra::ext(raster), error = function(e) NULL)
+  if (is.null(raster_ext) || all(terra::res(raster) == 0)) {
+    warning(sprintf("[extract] Raster for '%s' has zero extent, returning NA", feature_col))
+    return(result)
+  }
+
   if (all(geom_types %in% c("POINT", "MULTIPOINT"))) {
-    # Point extraction
+    # Point extraction — exactextractr does not support points
     pts <- terra::vect(panel_nonempty)
     vals <- terra::extract(raster, pts)
-    result[!is_empty] <- vals[[2]]
+    if (nrow(vals) > 0 && ncol(vals) >= 2) {
+      result[!is_empty] <- vals[[2]]
+    }
   } else {
-    # Polygon zonal extraction
-    polys <- terra::vect(panel_nonempty)
-    vals <- terra::extract(raster, polys, fun = stat, na.rm = TRUE, exact = TRUE)
-    result[!is_empty] <- vals[[2]]
+    # Polygon zonal extraction via exactextractr (C++, area-weighted, fast)
+    vals <- exactextractr::exact_extract(raster, panel_nonempty, fun = stat,
+                                         progress = FALSE)
+    result[!is_empty] <- vals
   }
 
   result
@@ -170,8 +207,18 @@ download_elevation_raster <- function(elevation_cfg,
                               elevation_cfg$storage$processed_path %||% "")
 
   if (file.exists(processed_path)) {
-    message(sprintf("[elevation] Raster already present: %s", processed_path))
-    return(processed_path)
+    # Validate that the existing file is in the canonical CRS.
+    # A pre-existing raw download (e.g. EPSG:4326) would silently corrupt
+    # all downstream rasters that use the DEM as a spatial template.
+    existing_r <- terra::rast(processed_path)
+    if (terra::same.crs(existing_r, terra::crs(canonical_crs))) {
+      message(sprintf("[elevation] Raster already present: %s", processed_path))
+      return(processed_path)
+    }
+    message(sprintf(
+      "[elevation] Existing raster at '%s' is not in %s — re-processing.",
+      processed_path, canonical_crs
+    ))
   }
 
   dir.create(dirname(processed_path), recursive = TRUE, showWarnings = FALSE)
@@ -237,6 +284,19 @@ extract_and_join_features <- function(panel_sf, feature_registry,
     return(panel_sf)
   }
 
+  workers <- get_runtime_parallel_workers(root_dir = root_dir)
+  # Cap terra threads: high thread counts on multi-layer stacks can
+  # cause GDAL handle corruption leading to [extent=0] errors.
+  # Note: terra::terraOptions() does NOT expose thread count, so
+  # save/restore via $threads returns NULL and crashes.  Just reset
+  # to 1 on exit (runs in isolated callr process anyway).
+  safe_threads <- min(workers, 4L)
+  terra::terraOptions(threads = safe_threads)
+  on.exit(terra::terraOptions(threads = 1L), add = TRUE)
+
+  message(sprintf("[features] Using %d terra thread(s) (requested %d, capped at 4).",
+                  safe_threads, workers))
+
   for (feature_entry in feature_registry) {
     feature_id <- feature_entry$id
     source_config <- feature_entry$source_config
@@ -246,6 +306,7 @@ extract_and_join_features <- function(panel_sf, feature_registry,
       next
     }
 
+    message(sprintf("[features] Loading raster for '%s' ...", feature_id))
     source_cfg <- load_source_config(source_config, root_dir = root_dir)
 
     raster <- load_raster(
@@ -254,6 +315,9 @@ extract_and_join_features <- function(panel_sf, feature_registry,
       canonical_crs = canonical_crs,
       root_dir = root_dir
     )
+    message(sprintf("[features] Extracting '%s' (nlyr=%d, ext=%s) ...",
+                    feature_id, terra::nlyr(raster),
+                    paste(round(as.vector(terra::ext(raster)), 0), collapse=",")))
 
     stat <- source_cfg$processing$zonal_stat %||% "mean"
     panel_sf[[feature_id]] <- extract_zonal_stat(
@@ -262,22 +326,29 @@ extract_and_join_features <- function(panel_sf, feature_registry,
       stat = stat,
       feature_col = feature_id
     )
+    message(sprintf("[features] '%s' done. Non-NA: %d/%d",
+                    feature_id, sum(!is.na(panel_sf[[feature_id]])), nrow(panel_sf)))
   }
 
   # Extract SoilGrids zonal features (if source config exists)
   soilgrids_cfg_path <- file.path(root_dir, "config", "sources", "soilgrids.yml")
   if (file.exists(soilgrids_cfg_path)) {
+    message("[features] Starting SoilGrids extraction ...")
     soilgrids_cfg <- yaml::read_yaml(soilgrids_cfg_path, eval.expr = FALSE)
     panel_sf <- extract_soil_zonal_features(
       panel_sf      = panel_sf,
       soilgrids_cfg = soilgrids_cfg,
       canonical_crs = canonical_crs,
-      root_dir      = root_dir
+      root_dir      = root_dir,
+      workers       = min(workers, 4L)
     )
+    message("[features] SoilGrids extraction complete.")
   }
 
   # Always append derived geometric features
+  message("[features] Adding geometric features ...")
   panel_sf <- add_geometric_features(panel_sf)
+  message("[features] All feature extraction complete.")
 
   panel_sf
 }

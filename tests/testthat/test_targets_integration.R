@@ -1,5 +1,8 @@
 testthat::test_that("toy project tar_make runs end-to-end", {
   testthat::skip_if_not_installed("callr")
+  if (!identical(Sys.getenv("RUN_TARGETS_INTEGRATION_TEST"), "1")) {
+    testthat::skip("Set RUN_TARGETS_INTEGRATION_TEST=1 to run end-to-end tar_make integration test")
+  }
   root <- file.path(tempdir(), paste0("tar_proj_", as.integer(stats::runif(1, 1, 1e9))))
   dir.create(root, recursive = TRUE, showWarnings = FALSE)
   dir.create(file.path(root, "R"), recursive = TRUE, showWarnings = FALSE)

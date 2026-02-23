@@ -1,5 +1,7 @@
 source(file.path("..", "..", "R", "duckdb_store.R"))
 
+testthat::skip_if_not_installed("duckdb")
+
 test_that("open/close duckdb works in memory", {
   con <- open_duckdb(":memory:")
   expect_true(DBI::dbIsValid(con))

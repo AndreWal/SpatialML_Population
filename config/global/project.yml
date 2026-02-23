@@ -6,7 +6,7 @@ project:
 
 runtime:
   fail_on_warning: false
-  parallel_workers: 6
+  parallel_workers: 20
   chunk_size_rows: 500000
 
 countries:
