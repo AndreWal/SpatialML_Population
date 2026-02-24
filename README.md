@@ -4,10 +4,10 @@ A reproducible geospatial ETL and spatial machine learning workflow for historic
 
 ## 🧪 Project
 
-This repository supports comparative population reconstruction across countries with heterogeneous historical records. National tabular and boundary datasets are harmonized into a common panel, enriched with geospatial predictors, and used to train spatially aware predictive models.
+This repository supports comparative population reconstruction across countries with heterogeneous historical records. National tabular and boundary datasets are harmonized into a common panel, enriched with geospatial predictors, and used to train spatially aware polygon-level models plus a mass-preserving dasymetric allocation workflow.
 
 Primary goal:
-- estimate population patterns for administrative units and periods where direct observations are sparse, inconsistent, or missing.
+- estimate population patterns for administrative units and periods where direct observations are sparse, inconsistent, or missing, and allocate known polygon totals to grid cells using explicit dasymetric weighting.
 
 ## ⚙️ Method overview
 
@@ -20,7 +20,7 @@ For each enabled country, the pipeline:
 5. Extracts configured raster covariates and adds derived geometric covariates.
 6. Writes country panel outputs.
 
-### 2) Cross-country modeling
+### 2) Cross-country polygon-level modeling
 After country panels are assembled, the workflow:
 1. Combines country panels into a global panel.
 2. Constructs SoilGrids PCA features (`soil_pc1` to `soil_pcN`).
@@ -28,13 +28,14 @@ After country panels are assembled, the workflow:
 4. Trains and tunes `ranger`, `xgboost`, and `lightgbm` models.
 5. Selects the best model by cross-validated RMSE.
 6. Evaluates final performance on a holdout country (`DEU` by default).
+7. Uses the selected model family as a score-proxy model for ML-weighted dasymetric allocation (not direct cell-count prediction).
 
 ### 3) Constrained dasymetric allocation (production path)
 For polygon-years with known population totals, the workflow:
 1. Builds a prediction grid in the canonical equal-area CRS.
 2. Computes exact polygon-grid overlap areas.
-3. Generates a nonnegative weighting surface (current baseline: uniform area).
-   - optional ML-weighted score surface from a score-proxy model trained without polygon-only `log_area`
+3. Generates a nonnegative cell-level weighting surface (current baseline: uniform area).
+   - optional ML-weighted score/intensity surface from a score-proxy model trained without polygon-only `log_area`
 4. Normalizes weights within each polygon-year and allocates polygon totals to cells exactly.
 5. Writes constrained population count rasters plus allocation diagnostics (mass-preservation QA).
 
@@ -74,7 +75,7 @@ Core output artifacts:
 - `data/final/predictions/global_<year>_intensity_<model_id>.tif`
 - `data/final/predictions/global_<year>_population_count_constrained_<model_id>.tif`
 - `data/final/predictions/global_<year>_population_count_calibrated_<model_id>.tif` (optional; when calibration totals are configured)
-- `data/final/diagnostics/allocation_diagnostics_all_<model_id>.csv` (pipeline default; `.parquet` optional)
+- `data/final/diagnostics/allocation_diagnostics_all_<model_id>.csv`
 - `models/model_summary.csv`
 - `models/cv_summary.csv`
 - `models/<model_id>_folds.csv`
@@ -128,6 +129,7 @@ R -q -e "testthat::test_dir('tests/testthat')"
 
 - Dependency versions are locked in `renv.lock`.
 - Workflow orchestration and caching are managed by `targets`.
+- The `targets` cache lives in `_targets/` (local/regenerable; ignored by git).
 - Containerized execution is defined by `Dockerfile` and `docker-compose.yml`.
 - Pipeline behavior is config-driven and country-extensible.
 
@@ -135,6 +137,7 @@ R -q -e "testthat::test_dir('tests/testthat')"
 
 ```text
 _targets.R              Pipeline definition
+_targets/               Local targets cache (git-ignored, regenerable)
 R/                      Pipeline functions
 config/                 Global, country, and source configuration
 data/raw/               Input data (not committed)
@@ -150,3 +153,8 @@ Use these files as source of truth:
 1. `docs/PROJECT_SPEC.md`
 2. `docs/DATA_SCHEMA.md`
 3. `docs/FEATURE_SOURCES.md`
+
+## Notes
+
+- The old legacy benchmark raster naming (`global_<year>_prediction_<model_id>.tif`) has been removed from the pipeline.
+- Production raster outputs use explicit semantics: `*_intensity_*`, `*_population_count_constrained_*`, and optional `*_population_count_calibrated_*`.
