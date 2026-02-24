@@ -153,8 +153,3 @@ Use these files as source of truth:
 1. `docs/PROJECT_SPEC.md`
 2. `docs/DATA_SCHEMA.md`
 3. `docs/FEATURE_SOURCES.md`
-
-## Notes
-
-- The old legacy benchmark raster naming (`global_<year>_prediction_<model_id>.tif`) has been removed from the pipeline.
-- Production raster outputs use explicit semantics: `*_intensity_*`, `*_population_count_constrained_*`, and optional `*_population_count_calibrated_*`.
