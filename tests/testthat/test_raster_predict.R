@@ -61,26 +61,7 @@ test_that("predict_to_raster errors on unsupported model class", {
   expect_error(predict_to_raster(list(), r, feature_names = "feat1"), "Unsupported model class")
 })
 
-test_that("write_prediction_raster writes GeoTIFF", {
-  tmp <- tempdir()
-  r <- terra::rast(
-    nrows = 3, ncols = 3,
-    xmin = 0, xmax = 3000, ymin = 0, ymax = 3000,
-    crs = "EPSG:3035"
-  )
-  terra::values(r) <- 1:9
-  names(r) <- "prediction"
-
-  path <- write_prediction_raster(r, "TST", "rf", output_dir = "output", root_dir = tmp)
-
-  expect_true(file.exists(path))
-  expect_true(grepl("\\.tif$", path))
-  expect_equal(terra::ncell(terra::rast(path)), 9)
-
-  unlink(file.path(tmp, "output"), recursive = TRUE)
-})
-
-test_that("inverse density transform restores per-cell population counts", {
+test_that("inverse density transform restores per-cell counts", {
   info <- list(
     target_var = "population",
     response_kind = "population_density_per_m2",

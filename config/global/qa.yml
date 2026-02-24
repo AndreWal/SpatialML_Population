@@ -19,3 +19,6 @@ qa:
 
   ranges:
     population_min: 1
+
+  allocation:
+    mass_rel_error_tolerance: 1.0e-8

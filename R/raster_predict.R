@@ -60,13 +60,15 @@ create_prediction_grid <- function(panel_sf, resolution_m = 1000,
 #'   model; used to determine which \code{year_XXXX} dummy layers to create.
 #' @param soil_pca_model Optional list from \code{fit_soil_pca}; when provided,
 #'   soil PCA component layers are added to the stack.
+#' @param include_log_area Logical; append constant `log_area` layer when TRUE.
 #' @return A multi-layer SpatRaster with one layer per feature.
 build_feature_stack <- function(grid_template, feature_registry,
                                 canonical_crs = "EPSG:3035",
                                 root_dir = ".",
                                 resolution_m = 1000, prediction_year = NULL,
                                 feature_names = NULL,
-                                soil_pca_model = NULL) {
+                                soil_pca_model = NULL,
+                                include_log_area = TRUE) {
   layers <- list()
 
   for (feature_entry in feature_registry) {
@@ -91,11 +93,13 @@ build_feature_stack <- function(grid_template, feature_registry,
   }
 
   # --- Constant derived-feature layers ---
-  # log_area: log1p of cell area in m² (EPSG:3035 is equal-area, so constant)
-  log_area_lyr <- grid_template
-  terra::values(log_area_lyr) <- log1p(resolution_m^2)
-  names(log_area_lyr) <- "log_area"
-  layers[["log_area"]] <- log_area_lyr
+  if (isTRUE(include_log_area)) {
+    # log_area: log1p of cell area in m² (EPSG:3035 is equal-area, so constant)
+    log_area_lyr <- grid_template
+    terra::values(log_area_lyr) <- log1p(resolution_m^2)
+    names(log_area_lyr) <- "log_area"
+    layers[["log_area"]] <- log_area_lyr
+  }
 
   # year dummy layers: one binary layer per decade that the model knows about.
   # The layer for `prediction_year` is set to 1; all others are 0.
@@ -185,88 +189,61 @@ predict_to_raster <- function(model, feature_stack, feature_names,
   pred_raster
 }
 
-#' Write prediction raster to GeoTIFF
-#'
-#' All predictions land in a single flat folder (no per-country subdirectory)
-#' so they are easy to discover as a collection.
-#'
-#' @param pred_raster SpatRaster of predictions.
-#' @param label File-name label (e.g. \code{"global_1990"}).
-#' @param model_id Model identifier.
-#' @param output_dir Output directory (relative to root); defaults to
-#'   data/final/predictions.
-#' @param root_dir Project root.
-#' @return Character path of written file.
-write_prediction_raster <- function(pred_raster, label, model_id,
-                                    output_dir = "data/final/predictions",
-                                    root_dir = ".") {
-  out_dir <- file.path(root_dir, output_dir)
-  dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+prediction_raster_to_score <- function(pred_raster, target_info) {
+  if (!inherits(pred_raster, "SpatRaster")) {
+    stop("pred_raster must be a terra::SpatRaster", call. = FALSE)
+  }
+  target_info <- target_info %||% list(transform = "identity", needs_area = FALSE)
 
-  filename <- paste0(label, "_prediction_", model_id, ".tif")
-  out_path <- file.path(out_dir, filename)
+  vals <- terra::values(pred_raster, mat = FALSE)
+  score_vals <- as.numeric(vals)
 
-  terra::writeRaster(pred_raster, out_path, overwrite = TRUE)
-  out_path
+  if (identical(target_info$transform, "log1p")) {
+    score_vals <- expm1(score_vals)
+  }
+  score_vals[!is.finite(score_vals)] <- NA_real_
+  score_vals <- pmax(score_vals, 0)
+
+  out <- pred_raster
+  terra::values(out) <- score_vals
+  names(out) <- "intensity"
+  out
 }
 
-#' Run full raster prediction pipeline for one time slice
-#'
-#' Creates a global grid, builds the feature stack (including \code{lat},
-#' \code{lon}, \code{log_area}, and a constant \code{year} layer at
-#' \code{prediction_year}), runs the best model, and writes a GeoTIFF.
-#'
-#' @param best_cv_result Best model CV result from select_best_model.
-#' @param panel_sf sf panel used for grid extent and clamping range.
-#' @param feature_registry List of enabled feature entries.
-#' @param ml_cfg Parsed ML config.
-#' @param canonical_crs CRS string.
-#' @param prediction_year Integer year to embed as the constant year feature.
-#'   Defaults to \code{max(panel_sf$year)}.
-#' @param label File-name prefix (e.g. \code{"global_1990"}).
-#' @param output_dir Output directory.
-#' @param root_dir Project root.
-#' @param soil_pca_model Optional list from \code{fit_soil_pca}; forwarded to
-#'   \code{build_feature_stack} for soil PCA raster layers.
-#' @return Character path of written GeoTIFF.
-run_raster_prediction <- function(best_cv_result, panel_sf, feature_registry,
-                                  ml_cfg, canonical_crs = "EPSG:3035",
-                                  prediction_year = NULL,
-                                  label = "global",
-                                  output_dir = "data/final/predictions",
-                                  root_dir = ".",
-                                  soil_pca_model = NULL) {
-
+predict_raster_surface <- function(best_cv_result, panel_sf, feature_registry,
+                                   ml_cfg, canonical_crs = "EPSG:3035",
+                                   prediction_year = NULL,
+                                   root_dir = ".",
+                                   soil_pca_model = NULL,
+                                   include_log_area = TRUE) {
   resolution_m <- ml_cfg$ml$raster_prediction$resolution_m %||% 1000
-  clamp        <- ml_cfg$ml$raster_prediction$clamp_to_training_range %||% TRUE
-  output_dir   <- output_dir %||% "data/final/predictions"
+  clamp <- ml_cfg$ml$raster_prediction$clamp_to_training_range %||% TRUE
 
-  # Fall back to most recent year in the panel when not supplied
   if (is.null(prediction_year)) {
-    panel_df        <- sf::st_drop_geometry(panel_sf)
+    panel_df <- sf::st_drop_geometry(panel_sf)
     prediction_year <- if ("year" %in% names(panel_df)) {
       max(as.integer(panel_df$year), na.rm = TRUE)
     } else NULL
   }
 
   grid <- create_prediction_grid(
-    panel_sf      = panel_sf,
-    resolution_m  = resolution_m,
+    panel_sf = panel_sf,
+    resolution_m = resolution_m,
     canonical_crs = canonical_crs
   )
 
   feature_stack <- build_feature_stack(
-    grid_template    = grid,
+    grid_template = grid,
     feature_registry = feature_registry,
-    canonical_crs    = canonical_crs,
-    root_dir         = root_dir,
-    resolution_m     = resolution_m,
-    prediction_year  = prediction_year,
-    feature_names    = best_cv_result$feature_names,
-    soil_pca_model   = soil_pca_model
+    canonical_crs = canonical_crs,
+    root_dir = root_dir,
+    resolution_m = resolution_m,
+    prediction_year = prediction_year,
+    feature_names = best_cv_result$feature_names,
+    soil_pca_model = soil_pca_model,
+    include_log_area = include_log_area
   )
 
-  # Get training y for clamping
   target_var <- ml_cfg$ml$target_variable %||% "population"
   target_info <- best_cv_result$target_info %||% list(
     target_var = target_var,
@@ -275,33 +252,19 @@ run_raster_prediction <- function(best_cv_result, panel_sf, feature_registry,
     needs_area = FALSE
   )
   train_y_vals <- target_response_from_panel(panel_sf, target_info)
-  train_y_model <- train_y_vals$y_model
 
   pred_raster <- predict_to_raster(
-    model         = best_cv_result$final_model,
+    model = best_cv_result$final_model,
     feature_stack = feature_stack,
     feature_names = best_cv_result$feature_names,
-    clamp         = clamp,
-    train_y       = train_y_model
+    clamp = clamp,
+    train_y = train_y_vals$y_model
   )
 
-  if (isTRUE(target_info$needs_area)) {
-    cell_area_m2 <- resolution_m^2
-    pred_vals <- terra::values(pred_raster, mat = FALSE)
-    pred_vals_count <- inverse_target_response(
-      pred_vals,
-      target_info = target_info,
-      area_m2 = rep(cell_area_m2, length(pred_vals))
-    )
-    terra::values(pred_raster) <- pred_vals_count
-    names(pred_raster) <- "prediction"
-  }
-
-  write_prediction_raster(
-    pred_raster = pred_raster,
-    label       = label,
-    model_id    = best_cv_result$model_id,
-    output_dir  = output_dir,
-    root_dir    = root_dir
+  list(
+    raster = pred_raster,
+    grid = grid,
+    target_info = target_info,
+    prediction_year = prediction_year
   )
 }

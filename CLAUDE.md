@@ -25,9 +25,16 @@ See @docs/FEATURE_SOURCES.md
 - Avoid hidden/manual preprocessing.
 - Prefer GeoPackage for vector outputs and GeoTIFF for rasters.
 - Keep docs in sync when schema or feature sources change.
+- Preserve support consistency: polygon-level features may differ from cell-level disaggregation features.
+- In constrained disaggregation mode, grid-cell allocations must aggregate back to source polygon totals (within documented tolerance).
 
 ## Where detailed rules live
 See `.claude/rules/*.md` for:
 - R code style
 - targets pipeline rules
 - geospatial standards
+
+## Notes on population mapping workflow
+- Treat ML raster predictions as a weighting/intensity surface by default.
+- Only interpret raster values as population counts after a documented allocation/calibration step.
+- If no polygon totals exist for an area/year, outputs should be labeled as relative intensity unless calibrated to external totals.

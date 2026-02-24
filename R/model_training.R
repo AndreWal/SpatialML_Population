@@ -1,5 +1,37 @@
 `%||%` <- function(x, y) if (is.null(x)) y else x
 
+make_parsnip_spec_fixed <- function(engine, seed = 42L) {
+  if (engine == "ranger") {
+    parsnip::rand_forest(
+      trees = 500, mtry = NULL, min_n = 5
+    ) |>
+      parsnip::set_engine("ranger",
+        importance  = "impurity",
+        num.threads = 1L,
+        seed        = seed
+      ) |>
+      parsnip::set_mode("regression")
+  } else if (engine == "xgboost") {
+    parsnip::boost_tree(
+      trees = 500, tree_depth = 6, learn_rate = 0.05, sample_size = 0.8
+    ) |>
+      parsnip::set_engine("xgboost", nthread = 1L, verbose = 0) |>
+      parsnip::set_mode("regression")
+  } else if (engine == "lightgbm") {
+    parsnip::boost_tree(
+      trees = 500, tree_depth = 6, learn_rate = 0.05, mtry = NULL
+    ) |>
+      parsnip::set_engine("lightgbm",
+        num_threads = 1L,
+        verbose     = -1L,
+        seed        = seed
+      ) |>
+      parsnip::set_mode("regression")
+  } else {
+    stop(sprintf("Unsupported engine: %s", engine), call. = FALSE)
+  }
+}
+
 #' Build a parsnip model specification with tune() placeholders
 #'
 #' Returns a parsnip model spec for the given engine with all tunable
@@ -71,16 +103,36 @@ run_spatial_cv <- function(model_spec, model_data, resamples, ml_cfg, seed = 42L
   # parallel fold processes do not oversubscribe the CPU.
   n_cores   <- parallel::detectCores(logical = FALSE)
   n_workers <- max(1L, n_cores - 1L)
-  cl <- parallel::makeForkCluster(n_workers)
-  doParallel::registerDoParallel(cl)
-  on.exit({ parallel::stopCluster(cl); foreach::registerDoSEQ() }, add = TRUE)
-  message(sprintf(
-    "[cv] Parallel backend: %d workers on %d cores (foreach=%s)",
-    n_workers, n_cores, foreach::getDoParName()
-  ))
+  cl <- NULL
+  backend_mode <- "sequential"
+  if (n_workers > 1L) {
+    cl <- tryCatch(
+      parallel::makeForkCluster(n_workers),
+      error = function(e) {
+        message(sprintf("[cv] Parallel backend unavailable, falling back to sequential: %s", e$message))
+        NULL
+      }
+    )
+  }
+  if (!is.null(cl)) {
+    doParallel::registerDoParallel(cl)
+    backend_mode <- "parallel"
+    on.exit({ parallel::stopCluster(cl); foreach::registerDoSEQ() }, add = TRUE)
+    message(sprintf(
+      "[cv] Parallel backend: %d workers on %d cores (foreach=%s)",
+      n_workers, n_cores, foreach::getDoParName()
+    ))
+  } else {
+    foreach::registerDoSEQ()
+    message(sprintf("[cv] Sequential backend (detected %d cores)", n_cores))
+  }
 
   # Build parsnip spec and workflow (.outcome ~ . uses all X columns)
-  spec <- make_parsnip_spec(engine, seed = seed)
+  spec <- if (isTRUE(model_spec$tune)) {
+    make_parsnip_spec(engine, seed = seed)
+  } else {
+    make_parsnip_spec_fixed(engine, seed = seed)
+  }
   wf   <- workflows::workflow() |>
     workflows::add_formula(.outcome ~ .) |>
     workflows::add_model(spec)
@@ -107,7 +159,7 @@ run_spatial_cv <- function(model_spec, model_data, resamples, ml_cfg, seed = 42L
         verbose      = FALSE,
         no_improve   = 15L,
         seed         = seed,
-        parallel_over = "resamples"  # parallelise across folds AND candidates
+        parallel_over = if (identical(backend_mode, "parallel")) "resamples" else NULL
       )
     )
 
@@ -130,7 +182,7 @@ run_spatial_cv <- function(model_spec, model_data, resamples, ml_cfg, seed = 42L
     control   = tune::control_resamples(
       save_pred     = FALSE,
       allow_par     = TRUE,
-      parallel_over = "resamples"
+      parallel_over = if (identical(backend_mode, "parallel")) "resamples" else NULL
     )
   )
 

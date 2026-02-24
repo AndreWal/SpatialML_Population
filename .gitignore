@@ -1,3 +1,15 @@
 # Ignore all files in the "data" directory
 data/
 models/
+
+# targets pipeline cache (internal artifacts, can be regenerated)
+_targets/
+
+# Common local runtime artifacts
+logs/
+cache/
+
+# R session/user files
+.Rhistory
+.RData
+.Ruserdata

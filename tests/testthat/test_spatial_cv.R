@@ -77,6 +77,28 @@ test_that("prepare_model_data handles missing values after target transform", {
   expect_equal(md$complete_idx, c(1L, 3L))
 })
 
+test_that("prepare_model_data can exclude polygon-only derived features", {
+  pts <- make_square_sf(2, cell = 1000)
+  panel <- sf::st_sf(
+    population = c(100, 200),
+    elevation_mean = c(5, 10),
+    log_area = c(1, 2),
+    lon = c(8, 9),
+    lat = c(47, 48),
+    geometry = pts
+  )
+  ml_cfg <- list(ml = list(target_variable = "population"))
+  registry <- list(list(id = "elevation_mean"))
+
+  md <- prepare_model_data(
+    panel, ml_cfg, registry,
+    include_polygon_only_features = FALSE
+  )
+
+  expect_false("log_area" %in% md$feature_names)
+  expect_true(all(c("lon", "lat", "elevation_mean") %in% md$feature_names))
+})
+
 test_that("create_spatial_resamples returns manual_rset indexed to model data", {
   skip_if_not_installed("spatialsample")
   skip_if_not_installed("rsample")

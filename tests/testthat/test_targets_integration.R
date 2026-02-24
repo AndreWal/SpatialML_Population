@@ -23,6 +23,12 @@ testthat::test_that("toy project tar_make runs end-to-end", {
   file.copy(file.path("..", "..", "R", "model_evaluation.R"), file.path(root, "R", "model_evaluation.R"))
   file.copy(file.path("..", "..", "R", "mlflow_utils.R"), file.path(root, "R", "mlflow_utils.R"))
   file.copy(file.path("..", "..", "R", "raster_predict.R"), file.path(root, "R", "raster_predict.R"))
+  file.copy(file.path("..", "..", "R", "grid_intersections.R"), file.path(root, "R", "grid_intersections.R"))
+  file.copy(file.path("..", "..", "R", "dasymetric_allocation.R"), file.path(root, "R", "dasymetric_allocation.R"))
+  file.copy(file.path("..", "..", "R", "allocation_validation.R"), file.path(root, "R", "allocation_validation.R"))
+  file.copy(file.path("..", "..", "R", "soilgrids.R"), file.path(root, "R", "soilgrids.R"))
+  file.copy(file.path("..", "..", "R", "terrain_features.R"), file.path(root, "R", "terrain_features.R"))
+  file.copy(file.path("..", "..", "R", "water_distance.R"), file.path(root, "R", "water_distance.R"))
   file.copy(file.path("..", "..", "R", "duckdb_store.R"), file.path(root, "R", "duckdb_store.R"))
 
   # --- Minimal real raw data files ---
@@ -84,6 +90,20 @@ testthat::test_that("toy project tar_make runs end-to-end", {
       "    unique_key: [\"country_code\", \"admin_unit_harmonized\", \"year\"]"
     ),
     file.path(root, "config", "global", "qa.yml")
+  )
+  writeLines(
+    c(
+      "allocation:",
+      "  mode: \"hybrid\"",
+      "  area_denominator: \"overlap_area_m2\"",
+      "  fallback_zero_weight: \"uniform_area\"",
+      "  qa:",
+      "    mass_rel_error_tolerance: 1.0e-8",
+      "  calibration:",
+      "    enabled: false",
+      "    totals_by_year: {}"
+    ),
+    file.path(root, "config", "global", "allocation.yml")
   )
   writeLines(
     c(

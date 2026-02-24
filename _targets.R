@@ -10,6 +10,9 @@ source(file.path("R", "model_training.R"))
 source(file.path("R", "model_evaluation.R"))
 source(file.path("R", "mlflow_utils.R"))
 source(file.path("R", "raster_predict.R"))
+source(file.path("R", "grid_intersections.R"))
+source(file.path("R", "dasymetric_allocation.R"))
+source(file.path("R", "allocation_validation.R"))
 source(file.path("R", "soilgrids.R"))
 source(file.path("R", "terrain_features.R"))
 source(file.path("R", "water_distance.R"))
@@ -34,12 +37,14 @@ list(
   tar_target(crs_cfg_file,     file.path("config", "global", "crs.yml"),     format = "file"),
   tar_target(qa_cfg_file,      file.path("config", "global", "qa.yml"),      format = "file"),
   tar_target(ml_cfg_file,      file.path("config", "global", "ml.yml"),      format = "file"),
+  tar_target(allocation_cfg_file, file.path("config", "global", "allocation.yml"), format = "file"),
 
   tar_target(project_cfg, read_yaml_file(project_cfg_file)),
   tar_target(paths_cfg,   read_yaml_file(paths_cfg_file)),
   tar_target(crs_cfg,     read_yaml_file(crs_cfg_file)),
   tar_target(qa_cfg,      read_yaml_file(qa_cfg_file)),
   tar_target(ml_cfg,      read_yaml_file(ml_cfg_file)),
+  tar_target(allocation_cfg, read_yaml_file(allocation_cfg_file)),
 
   # ── Feature registry ──────────────────────────────────────────
   tar_target(features_cfg_file, file.path("config", "sources", "features.yml"), format = "file"),
@@ -321,6 +326,47 @@ list(
     select_best_model(cv_results, metric = "rmse")
   ),
 
+  # ── Score-proxy model (cell-score compatible, excludes polygon-only features) ──
+  # Transitional bridge: trains a second polygon-support model using the same
+  # target/response setup but without `log_area`, so raster scores used for
+  # dasymetric allocation do not depend on polygon-only predictors.
+  tar_target(
+    score_model_data,
+    prepare_model_data(
+      panel_sf = train_panel,
+      ml_cfg = ml_cfg,
+      feature_registry = feature_registry,
+      include_polygon_only_features = FALSE
+    )
+  ),
+  tar_target(
+    score_spatial_folds,
+    create_spatial_resamples(
+      panel_sf = train_panel,
+      model_data = score_model_data,
+      ml_cfg = ml_cfg,
+      seed = project_cfg$project$seed
+    )
+  ),
+  tar_target(
+    score_model_spec,
+    list(
+      id = paste0(best_model$model_id %||% "best", "_score"),
+      engine = best_model$engine %||% "ranger",
+      tune = FALSE
+    )
+  ),
+  tar_target(
+    score_model_result,
+    run_spatial_cv(
+      model_spec = score_model_spec,
+      model_data = score_model_data,
+      resamples = score_spatial_folds,
+      ml_cfg = ml_cfg,
+      seed = project_cfg$project$seed
+    )
+  ),
+
   # ── CV summary ────────────────────────────────────────────────
   tar_target(
     cv_summary,
@@ -363,34 +409,314 @@ list(
     )
   ),
 
-  # ── Raster predictions: one GeoTIFF per decade → data/final/predictions/ ──
-  #
-  # The `year` column already contains round decade values (1850, 1860, …).
-  # Each raster sets year_<decade>=1 and all other year dummies to 0, exactly
-  # mirroring how the training feature matrix was constructed.
+  # ── Constrained dasymetric allocation (baseline: uniform area) ─────────────
   tar_target(
-    prediction_rasters,
+    allocation_mass_tolerance_rel,
+    allocation_cfg$allocation$qa$mass_rel_error_tolerance %||%
+      qa_cfg$qa$allocation$mass_rel_error_tolerance %||% 1e-8
+  ),
+  tar_target(
+    allocation_panel_constrained,
     {
-      decades   <- sort(unique(as.integer(combined_panel$year)))
-      out_dir   <- paths_cfg$paths$predictions %||% "data/final/predictions"
-      paths     <- character(0)
+      panel <- combined_panel
+      if ("population" %in% names(panel)) {
+        keep <- is.finite(as.numeric(panel$population))
+        panel <- panel[keep, , drop = FALSE]
+      }
+      panel
+    }
+  ),
+  tar_target(
+    polygon_grid_intersections,
+    {
+      alloc_grid <- create_prediction_grid(
+        panel_sf = allocation_panel_constrained,
+        resolution_m = ml_cfg$ml$raster_prediction$resolution_m %||% 1000,
+        canonical_crs = crs_cfg$crs$canonical
+      )
+      build_polygon_grid_intersections(
+        panel_sf = allocation_panel_constrained,
+        grid_template = alloc_grid,
+        canonical_crs = crs_cfg$crs$canonical,
+        keep_geometry = FALSE
+      )
+    }
+  ),
+  tar_target(
+    uniform_area_allocation,
+    allocate_uniform_by_area(
+      intersections_df = polygon_grid_intersections,
+      area_denominator_col = allocation_cfg$allocation$area_denominator %||% "overlap_area_m2",
+      polygon_total_col = "population"
+    )
+  ),
+  tar_target(
+    allocation_diagnostics_uniform,
+    validate_mass_preservation(
+      allocation_df = uniform_area_allocation,
+      polygon_panel = allocation_panel_constrained,
+      polygon_total_col = "population",
+      tolerance_rel = allocation_mass_tolerance_rel
+    )
+  ),
+  tar_target(
+    allocation_qc_uniform,
+    assert_allocation_qc(
+      diagnostics_df = allocation_diagnostics_uniform,
+      tolerance_rel = allocation_mass_tolerance_rel
+    )
+  ),
+  tar_target(
+    allocation_diagnostics_uniform_summary,
+    {
+      allocation_qc_uniform
+      allocation_diagnostics_summary(
+        allocation_diagnostics_uniform,
+        tolerance_rel = allocation_mass_tolerance_rel
+      )
+    }
+  ),
+  tar_target(
+    allocation_diagnostics_uniform_file,
+    write_allocation_diagnostics(
+      diagnostics_df = allocation_diagnostics_uniform,
+      model_id = "uniform_area",
+      year = NULL,
+      output_dir = file.path(paths_cfg$paths$final_data %||% "data/final", "diagnostics"),
+      root_dir = ".",
+      prefer_parquet = FALSE
+    ),
+    format = "file"
+  ),
+  tar_target(
+    constrained_population_rasters_uniform,
+    {
+      decades <- sort(unique(as.integer(uniform_area_allocation$year)))
+      out_dir <- paths_cfg$paths$predictions %||% "data/final/predictions"
+      alloc_grid <- create_prediction_grid(
+        panel_sf = allocation_panel_constrained,
+        resolution_m = ml_cfg$ml$raster_prediction$resolution_m %||% 1000,
+        canonical_crs = crs_cfg$crs$canonical
+      )
+      paths <- character(0)
       for (decade in decades) {
-        path <- run_raster_prediction(
-          best_cv_result   = best_model,
-          panel_sf         = combined_panel,
-          feature_registry = feature_registry,
-          ml_cfg           = ml_cfg,
-          canonical_crs    = crs_cfg$crs$canonical,
-          prediction_year  = decade,
-          label            = paste0("global_", decade),
-          output_dir       = out_dir,
-          root_dir         = ".",
-          soil_pca_model   = soil_pca_model
+        alloc_y <- uniform_area_allocation[as.integer(uniform_area_allocation$year) == decade, , drop = FALSE]
+        path <- write_constrained_population_raster(
+          allocation_df = alloc_y,
+          grid_template = alloc_grid,
+          label = paste0("global_", decade),
+          model_id = "uniform_area",
+          output_dir = out_dir,
+          root_dir = "."
         )
         paths <- c(paths, path)
       }
       paths
     },
+    format = "file"
+  ),
+  tar_target(
+    intensity_rasters_uniform,
+    {
+      decades <- sort(unique(as.integer(uniform_area_allocation$year)))
+      out_dir <- paths_cfg$paths$predictions %||% "data/final/predictions"
+      alloc_grid <- create_prediction_grid(
+        panel_sf = allocation_panel_constrained,
+        resolution_m = ml_cfg$ml$raster_prediction$resolution_m %||% 1000,
+        canonical_crs = crs_cfg$crs$canonical
+      )
+      paths <- character(0)
+      for (decade in decades) {
+        alloc_y <- uniform_area_allocation[as.integer(uniform_area_allocation$year) == decade, , drop = FALSE]
+        intensity_r <- rasterize_cell_values(
+          grid_template = alloc_grid,
+          cell_values = alloc_y,
+          value_col = "weight_raw",
+          fun = sum,
+          background = 0,
+          layer_name = "intensity"
+        )
+        vals <- terra::values(intensity_r, mat = FALSE)
+        total_score <- sum(vals, na.rm = TRUE)
+        if (is.finite(total_score) && total_score > 0) {
+          terra::values(intensity_r) <- vals / total_score
+        }
+        path <- predict_unconstrained_intensity(
+          score_raster = intensity_r,
+          label = paste0("global_", decade),
+          model_id = "uniform_area",
+          output_dir = out_dir,
+          root_dir = "."
+        )
+        paths <- c(paths, path)
+      }
+      paths
+    },
+    format = "file"
+  ),
+
+  # ── ML-weighted constrained allocation (score proxy model) ──────────────────
+  tar_target(
+    calibration_totals_by_year,
+    {
+      cal <- ml_cfg$ml$calibration %||% list()
+      alloc_cal <- allocation_cfg$allocation$calibration %||% list()
+      enabled <- alloc_cal$enabled
+      if (is.null(enabled)) enabled <- cal$enabled
+      if (!isTRUE(enabled)) return(NULL)
+      totals <- alloc_cal$totals_by_year %||% cal$totals_by_year %||% NULL
+      if (is.null(totals)) return(NULL)
+      out <- unlist(totals, use.names = TRUE)
+      vals <- suppressWarnings(as.numeric(out))
+      stats::setNames(vals, names(out))
+    }
+  ),
+  tar_target(
+    allocation_years_ml,
+    sort(unique(as.integer(polygon_grid_intersections$year)))
+  ),
+  tar_target(
+    ml_weighted_allocation_year,
+    {
+      decade <- as.integer(allocation_years_ml)
+      out_dir <- paths_cfg$paths$predictions %||% "data/final/predictions"
+      alloc_grid <- create_prediction_grid(
+        panel_sf = allocation_panel_constrained,
+        resolution_m = ml_cfg$ml$raster_prediction$resolution_m %||% 1000,
+        canonical_crs = crs_cfg$crs$canonical
+      )
+      pred <- predict_raster_surface(
+        best_cv_result = score_model_result,
+        panel_sf = combined_panel,
+        feature_registry = feature_registry,
+        ml_cfg = ml_cfg,
+        canonical_crs = crs_cfg$crs$canonical,
+        prediction_year = decade,
+        root_dir = ".",
+        soil_pca_model = soil_pca_model,
+        include_log_area = FALSE
+      )
+      score_r <- prediction_raster_to_score(pred$raster, pred$target_info)
+      intensity_path <- predict_unconstrained_intensity(
+        score_raster = score_r,
+        label = paste0("global_", decade),
+        model_id = score_model_result$model_id,
+        output_dir = out_dir,
+        root_dir = "."
+      )
+
+      ints_y <- polygon_grid_intersections[as.integer(polygon_grid_intersections$year) == decade, , drop = FALSE]
+      ints_scored <- join_cell_scores_from_raster(ints_y, score_r, score_col = "score_raw")
+      alloc_y <- allocate_constrained_from_scores(
+        intersections_df = ints_scored,
+        score_col = "score_raw",
+        area_denominator_col = allocation_cfg$allocation$area_denominator %||% "overlap_area_m2",
+        polygon_total_col = "population"
+      )
+      panel_y <- allocation_panel_constrained[as.integer(allocation_panel_constrained$year) == decade, , drop = FALSE]
+      diagnostics <- validate_mass_preservation(
+        allocation_df = alloc_y,
+        polygon_panel = panel_y,
+        polygon_total_col = "population",
+        tolerance_rel = allocation_mass_tolerance_rel
+      )
+
+      constrained_path <- write_constrained_population_raster(
+        allocation_df = alloc_y,
+        grid_template = alloc_grid,
+        label = paste0("global_", decade),
+        model_id = score_model_result$model_id,
+        output_dir = out_dir,
+        root_dir = "."
+      )
+
+      calibrated_path <- character(0)
+      if (!is.null(calibration_totals_by_year)) {
+        tgt <- calibration_totals_by_year[as.character(decade)]
+        if (length(tgt) == 1L && is.finite(tgt)) {
+          cal_r <- calibrate_intensity_raster(score_r, target_total = tgt)
+          calibrated_path <- write_semantic_raster(
+            raster = cal_r,
+            label = paste0("global_", decade),
+            model_id = score_model_result$model_id,
+            kind = "calibrated",
+            output_dir = out_dir,
+            root_dir = "."
+          )
+          rm(cal_r)
+        }
+      }
+
+      rm(pred, score_r, ints_y, ints_scored, alloc_y, panel_y, alloc_grid)
+      invisible(gc())
+
+      list(
+        year = decade,
+        diagnostics = diagnostics,
+        intensity_path = intensity_path,
+        constrained_path = constrained_path,
+        calibrated_path = calibrated_path
+      )
+    },
+    pattern = map(allocation_years_ml),
+    iteration = "list"
+  ),
+  tar_target(
+    allocation_diagnostics_ml,
+    {
+      parts <- ml_weighted_allocation_year
+      diags <- lapply(parts, function(x) x$diagnostics)
+      if (length(diags)) do.call(rbind, diags) else data.frame()
+    }
+  ),
+  tar_target(
+    allocation_qc_ml,
+    assert_allocation_qc(
+      diagnostics_df = allocation_diagnostics_ml,
+      tolerance_rel = allocation_mass_tolerance_rel
+    )
+  ),
+  tar_target(
+    allocation_diagnostics_ml_summary,
+    {
+      allocation_qc_ml
+      allocation_diagnostics_summary(
+        allocation_diagnostics_ml,
+        tolerance_rel = allocation_mass_tolerance_rel
+      )
+    }
+  ),
+  tar_target(
+    allocation_diagnostics_ml_file,
+    write_allocation_diagnostics(
+      diagnostics_df = allocation_diagnostics_ml,
+      model_id = score_model_result$model_id,
+      year = NULL,
+      output_dir = file.path(paths_cfg$paths$final_data %||% "data/final", "diagnostics"),
+      root_dir = ".",
+      prefer_parquet = FALSE
+    ),
+    format = "file"
+  ),
+  tar_target(
+    intensity_rasters_ml,
+    {
+      allocation_qc_ml
+      unlist(lapply(ml_weighted_allocation_year, function(x) x$intensity_path), use.names = FALSE)
+    },
+    format = "file"
+  ),
+  tar_target(
+    constrained_population_rasters_ml,
+    {
+      allocation_qc_ml
+      unlist(lapply(ml_weighted_allocation_year, function(x) x$constrained_path), use.names = FALSE)
+    },
+    format = "file"
+  ),
+  tar_target(
+    calibrated_population_rasters_ml,
+    unlist(lapply(ml_weighted_allocation_year, function(x) x$calibrated_path), use.names = FALSE),
     format = "file"
   )
 )

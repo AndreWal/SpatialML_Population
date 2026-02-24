@@ -1,0 +1,18 @@
+allocation:
+  mode: "hybrid"  # constrained where polygon totals exist; intensity elsewhere
+
+  # Area denominator used in weight construction:
+  # weight_raw = score_raw * area_denominator
+  area_denominator: "overlap_area_m2"
+
+  fallback_zero_weight: "uniform_area"
+
+  qa:
+    mass_rel_error_tolerance: 1.0e-8
+
+  calibration:
+    enabled: false
+    # Optional named mapping used for calibrated count rasters in areas/years
+    # without polygon totals. Keys should match panel years (e.g. "1900").
+    totals_by_year: {}
+

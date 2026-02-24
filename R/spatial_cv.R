@@ -145,8 +145,12 @@ create_spatial_resamples <- function(panel_sf, model_data, ml_cfg, seed = 42L) {
 #' @param panel_sf sf object with target and feature columns.
 #' @param ml_cfg Parsed ML config list.
 #' @param feature_registry List of enabled feature entries.
+#' @param include_polygon_only_features Logical; include polygon-only derived
+#'   features (currently `log_area`) when TRUE. Set FALSE for cell-score proxy
+#'   model training to avoid reusing polygon-support-only predictors.
 #' @return List with elements `y`, `X`, `feature_names`, and `complete_idx`.
-prepare_model_data <- function(panel_sf, ml_cfg, feature_registry) {
+prepare_model_data <- function(panel_sf, ml_cfg, feature_registry,
+                               include_polygon_only_features = TRUE) {
   target_var <- ml_cfg$ml$target_variable %||% "population"
   feature_names <- vapply(feature_registry, `[[`, character(1), "id")
 
@@ -167,7 +171,10 @@ prepare_model_data <- function(panel_sf, ml_cfg, feature_registry) {
   }
 
   # Append built-in scalar derived features if present in the panel
-  derived_scalar <- c("log_area", "lon", "lat")
+  derived_scalar <- c("lon", "lat")
+  if (isTRUE(include_polygon_only_features)) {
+    derived_scalar <- c("log_area", derived_scalar)
+  }
   for (d in derived_scalar) {
     if (d %in% names(df) && !d %in% feature_names) {
       feature_names <- c(feature_names, d)

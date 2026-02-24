@@ -29,7 +29,7 @@ test_that("compute_metrics handles empty input", {
 
 test_that("make_parsnip_spec supports ranger and xgboost and errors otherwise", {
   skip_if_not_installed("parsnip")
-  skip_if_not_installed("tune")
+  suppressWarnings(skip_if_not_installed("tune"))
   expect_s3_class(make_parsnip_spec("ranger"), "model_spec")
   expect_s3_class(make_parsnip_spec("xgboost"), "model_spec")
   expect_error(make_parsnip_spec("unknown"), "Unsupported")
@@ -37,7 +37,7 @@ test_that("make_parsnip_spec supports ranger and xgboost and errors otherwise", 
 
 test_that("make_parsnip_spec supports lightgbm when dependencies are installed", {
   skip_if_not_installed("parsnip")
-  skip_if_not_installed("tune")
+  suppressWarnings(skip_if_not_installed("tune"))
   skip_if_not_installed("bonsai")
   skip_if_not_installed("lightgbm")
   expect_s3_class(make_parsnip_spec("lightgbm"), "model_spec")
@@ -84,8 +84,16 @@ test_that("run_spatial_cv produces results with untuned ranger", {
   skip_if_not_installed("spatialsample")
 
   set.seed(42)
+  coords <- do.call(
+    rbind,
+    lapply(seq_len(20), function(i) {
+      col <- (i - 1) %% 5
+      row <- (i - 1) %/% 5
+      c(col * 100000, row * 100000)
+    })
+  )
   pts <- sf::st_sfc(
-    lapply(seq_len(20), function(i) sf::st_point(c(i * 100000, 0))),
+    lapply(seq_len(nrow(coords)), function(i) sf::st_point(coords[i, ])),
     crs = "EPSG:3035"
   )
   panel <- sf::st_sf(

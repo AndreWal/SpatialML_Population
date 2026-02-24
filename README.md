@@ -28,7 +28,15 @@ After country panels are assembled, the workflow:
 4. Trains and tunes `ranger`, `xgboost`, and `lightgbm` models.
 5. Selects the best model by cross-validated RMSE.
 6. Evaluates final performance on a holdout country (`DEU` by default).
-7. Generates year/decade-specific prediction rasters.
+
+### 3) Constrained dasymetric allocation (production path)
+For polygon-years with known population totals, the workflow:
+1. Builds a prediction grid in the canonical equal-area CRS.
+2. Computes exact polygon-grid overlap areas.
+3. Generates a nonnegative weighting surface (current baseline: uniform area).
+   - optional ML-weighted score surface from a score-proxy model trained without polygon-only `log_area`
+4. Normalizes weights within each polygon-year and allocates polygon totals to cells exactly.
+5. Writes constrained population count rasters plus allocation diagnostics (mass-preservation QA).
 
 ## 🌐 Included countries (current config)
 
@@ -63,7 +71,10 @@ Core output artifacts:
 - `data/final/<ISO3>/<ISO3>_panel.parquet`
 - `data/final/global_panel.gpkg`
 - `data/final/global_panel.parquet`
-- `data/final/predictions/global_<year>_prediction_<model_id>.tif`
+- `data/final/predictions/global_<year>_intensity_<model_id>.tif`
+- `data/final/predictions/global_<year>_population_count_constrained_<model_id>.tif`
+- `data/final/predictions/global_<year>_population_count_calibrated_<model_id>.tif` (optional; when calibration totals are configured)
+- `data/final/diagnostics/allocation_diagnostics_all_<model_id>.csv` (pipeline default; `.parquet` optional)
 - `models/model_summary.csv`
 - `models/cv_summary.csv`
 - `models/<model_id>_folds.csv`
@@ -97,6 +108,7 @@ R -q -e "testthat::test_dir('tests/testthat')"
 - `config/global/project.yml`: enabled countries, project seed
 - `config/global/crs.yml`: canonical CRS
 - `config/global/ml.yml`: model setup, CV, holdout country, raster prediction settings
+- `config/global/allocation.yml`: constrained allocation settings (area denominator, fallback, allocation QA tolerance, optional calibration totals)
 - `config/global/qa.yml`: QA thresholds and behavior
 - `config/global/paths.yml`: output directory settings
 - `config/countries/<ISO3>.yml`: country-specific input mappings and assembly logic
